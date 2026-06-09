@@ -4,7 +4,6 @@ import {
   ArrowLeft,
   ArrowRight,
   Boxes,
-  Copy,
   Download,
   FileUp,
   Gauge,
@@ -18,6 +17,7 @@ import PreviewCanvas from "./components/PreviewCanvas";
 import StepsBar from "./components/StepsBar";
 import { Button, Card, Label, Metric } from "./components/ui";
 import { downloadPdf, downloadSvg } from "./lib/exporters";
+import { normalizeSvgMarkup } from "./lib/geometry";
 import { importFiles } from "./lib/importers";
 import { runNesting } from "./lib/nesting";
 import { formatArea, formatMeasure } from "./lib/units";
@@ -96,13 +96,18 @@ export default function App() {
   const enabledPieces = store.pieces.filter((piece) => piece.enabled);
   const invalidPieces = store.pieces.filter((piece) => piece.warnings.length > 0);
   const canContinueFromPieces = enabledPieces.length > 0;
-  const canContinueFromMaterial = canContinueFromPieces && store.material.width > 0 && store.material.height > 0;
+  const canContinueFromMaterial =
+    canContinueFromPieces && store.material.width > 0 && store.material.height > 0;
   const resultMetrics = store.result
     ? [
         { label: "Aprovechamiento", value: `${store.result.utilization.toFixed(1)}%`, tone: "accent" as const },
         { label: "Placas usadas", value: store.result.usedSheets, tone: "default" as const },
         { label: "Piezas acomodadas", value: store.result.placements.length, tone: "default" as const },
-        { label: "Sin acomodar", value: store.result.unplaced.length, tone: store.result.unplaced.length ? ("warning" as const) : ("default" as const) }
+        {
+          label: "Sin acomodar",
+          value: store.result.unplaced.length,
+          tone: store.result.unplaced.length ? ("warning" as const) : ("default" as const)
+        }
       ]
     : null;
 
@@ -147,7 +152,11 @@ export default function App() {
                 </div>
               </div>
               <Metric label="Piezas activas" value={enabledPieces.length} tone="accent" />
-              <Metric label="Advertencias" value={invalidPieces.length} tone={invalidPieces.length ? "warning" : "default"} />
+              <Metric
+                label="Advertencias"
+                value={invalidPieces.length}
+                tone={invalidPieces.length ? "warning" : "default"}
+              />
               <Metric
                 label="Área material"
                 value={formatArea(store.material.width * store.material.height, store.material.unit)}
@@ -176,7 +185,7 @@ export default function App() {
                       <h2 className="mt-4 text-2xl font-semibold">Paso 1. Cargar archivos</h2>
                       <p className="mt-2 max-w-xl text-sm leading-6 text-ink/68">
                         Arrastra tus archivos aquí o usa el selector. Puedes trabajar con `SVG`,
-                        `DXF` y ahora también `DWG`.
+                        `DXF` y también `DWG`.
                       </p>
                     </div>
 
@@ -216,7 +225,10 @@ export default function App() {
                       siendo guardarlo como `DXF` y volverlo a subir.
                     </p>
                     {store.messages.map((message, index) => (
-                      <p key={`${message}-${index}`} className="rounded-[18px] border border-line/70 bg-white px-3 py-2 text-sm text-ink/72">
+                      <p
+                        key={`${message}-${index}`}
+                        className="rounded-[18px] border border-line/70 bg-white px-3 py-2 text-sm text-ink/72"
+                      >
                         {message}
                       </p>
                     ))}
@@ -235,8 +247,8 @@ export default function App() {
                     Paso 2. Elegir piezas y cantidades
                   </h2>
                   <p className="mt-2 text-sm text-ink/65">
-                    Previsualiza las piezas, activa lo que quieres cortar y ajusta cantidades sin perder de
-                    vista el conjunto.
+                    Revisa las piezas cargadas, ajusta cantidades y deja lista la selección antes de
+                    pasar al material.
                   </p>
                 </div>
               </div>
@@ -244,7 +256,7 @@ export default function App() {
               <div className="sticky top-4 z-10 mt-5 rounded-[22px] border border-line bg-white/95 p-4 shadow-panel backdrop-blur">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="text-sm text-ink/65">
-                    Ajusta aquí tus piezas y luego continúa sin bajar hasta el fondo.
+                    Ajusta aquí tus piezas y luego continúa al siguiente paso.
                   </div>
                   <div className="flex flex-wrap gap-3">
                     <Button variant="secondary" onClick={() => goToStep("carga")}>
@@ -259,32 +271,28 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="mt-5 rounded-[28px] border border-line bg-[#f8fbf5] p-5">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-xl font-semibold">Previsualización de piezas</h3>
-                    <p className="mt-1 text-sm text-ink/62">
-                      Vista general de las piezas activas para revisar proporciones antes del anidado.
-                    </p>
+              <div className="mt-5 overflow-auto rounded-[28px] border border-line bg-white">
+                <div className="min-w-[1120px]">
+                  <div className="grid grid-cols-[72px_minmax(360px,1.7fr)_minmax(260px,1fr)_minmax(170px,0.65fr)_minmax(170px,0.65fr)] items-center border-b border-line bg-[#fbfcfa] px-4 py-4 text-sm font-semibold uppercase tracking-[0.06em] text-ink/80">
+                    <div className="flex justify-center">
+                      <span className="h-6 w-6 rounded-md border border-line bg-white" />
+                    </div>
+                    <div>Filename</div>
+                    <div>Cantidad</div>
+                    <div>Longitud</div>
+                    <div>Altura</div>
                   </div>
-                  <div className="rounded-full border border-line bg-white px-4 py-2 text-sm text-ink/70">
-                    {enabledPieces.length} activas
-                  </div>
-                </div>
 
-                <div className="mt-4">
-                  <PiecesOverview pieces={enabledPieces} />
+                  {store.pieces.length ? (
+                    store.pieces.map((piece, index) => (
+                      <PieceRow key={piece.id} piece={piece} isLast={index === store.pieces.length - 1} />
+                    ))
+                  ) : (
+                    <div className="px-5 py-10 text-center text-sm text-ink/55">
+                      Aún no hay piezas cargadas.
+                    </div>
+                  )}
                 </div>
-              </div>
-
-              <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                {store.pieces.length ? (
-                  store.pieces.map((piece) => <PieceCard key={piece.id} piece={piece} />)
-                ) : (
-                  <div className="col-span-full rounded-[24px] border border-dashed border-line px-5 py-10 text-center text-sm text-ink/55">
-                    Aún no hay piezas cargadas.
-                  </div>
-                )}
               </div>
             </Card>
           ) : null}
@@ -311,7 +319,10 @@ export default function App() {
                     min={1}
                     value={store.material.sheetCount}
                     onChange={(event) =>
-                      store.setMaterial({ ...store.material, sheetCount: Math.max(Number(event.target.value) || 1, 1) })
+                      store.setMaterial({
+                        ...store.material,
+                        sheetCount: Math.max(Number(event.target.value) || 1, 1)
+                      })
                     }
                   />
                 </Label>
@@ -358,7 +369,9 @@ export default function App() {
                     key={preset.label}
                     variant="secondary"
                     className="px-3 py-2 text-xs"
-                    onClick={() => store.setMaterial({ ...store.material, width: preset.width, height: preset.height })}
+                    onClick={() =>
+                      store.setMaterial({ ...store.material, width: preset.width, height: preset.height })
+                    }
                   >
                     {preset.label}
                   </Button>
@@ -405,7 +418,10 @@ export default function App() {
                     className={inputClass}
                     value={store.nesting.rotations}
                     onChange={(event) =>
-                      store.setNesting({ ...store.nesting, rotations: event.target.value as typeof store.nesting.rotations })
+                      store.setNesting({
+                        ...store.nesting,
+                        rotations: event.target.value as typeof store.nesting.rotations
+                      })
                     }
                   >
                     <option value="none">Sin rotación</option>
@@ -525,27 +541,43 @@ export default function App() {
   );
 }
 
-function PieceCard({ piece }: { piece: PieceItem }) {
+function PieceRow({ piece, isLast }: { piece: PieceItem; isLast: boolean }) {
   const updatePiece = useProjectStore((state) => state.updatePiece);
-  const duplicatePiece = useProjectStore((state) => state.duplicatePiece);
   const removePiece = useProjectStore((state) => state.removePiece);
   const material = useProjectStore((state) => state.material);
-
   const tooLarge = piece.geometry.width > material.width || piece.geometry.height > material.height;
+  const markup = normalizeSvgMarkup(piece.geometry.svgMarkup, piece.geometry.sourceBounds);
 
   return (
-    <div className="grid gap-4 rounded-[26px] border border-line bg-[#fcfdfb] p-4 md:grid-cols-[150px_1fr]">
-      <div className="flex h-[130px] items-center justify-center rounded-[22px] border border-line/70 bg-canvas p-3">
-        <svg viewBox={`0 0 ${piece.geometry.width + 16} ${piece.geometry.height + 16}`} className="h-full w-full">
-          <g transform="translate(8 8)" dangerouslySetInnerHTML={{ __html: piece.geometry.svgMarkup }} />
-        </svg>
+    <div
+      className={`grid grid-cols-[72px_minmax(360px,1.7fr)_minmax(260px,1fr)_minmax(170px,0.65fr)_minmax(170px,0.65fr)] items-center gap-4 px-4 py-4 ${
+        isLast ? "" : "border-b border-line"
+      }`}
+    >
+      <div className="flex justify-center">
+        <input
+          type="checkbox"
+          className="h-6 w-6 rounded-md border-line"
+          checked={piece.enabled}
+          onChange={(event) => updatePiece(piece.id, (current) => ({ ...current, enabled: event.target.checked }))}
+        />
       </div>
 
-      <div className="grid gap-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="grid grid-cols-[200px_1fr] items-start gap-5">
+        <div className="flex h-[160px] items-center justify-center overflow-hidden rounded-[24px] border border-line bg-[#f3f7ef] p-4">
+          <svg viewBox={`0 0 ${piece.geometry.width + 18} ${piece.geometry.height + 18}`} className="h-full w-full">
+            <g
+              transform="translate(9 9)"
+              className="[&_circle]:fill-transparent [&_ellipse]:fill-transparent [&_path]:fill-transparent [&_polygon]:fill-transparent [&_polyline]:fill-transparent [&_rect]:fill-transparent [&_*]:stroke-[#9eb4c8] [&_*]:stroke-[1.4]"
+              dangerouslySetInnerHTML={{ __html: markup }}
+            />
+          </svg>
+        </div>
+
+        <div className="flex min-h-[160px] flex-col justify-between gap-4">
           <div>
             <input
-              className="rounded-xl border border-transparent bg-transparent px-2 py-1 text-lg font-semibold outline-none transition focus:border-line focus:bg-canvas"
+              className="rounded-xl border border-transparent bg-transparent px-2 py-1 text-[18px] font-semibold outline-none transition focus:border-line focus:bg-canvas"
               value={piece.name}
               onChange={(event) =>
                 updatePiece(piece.id, (current) => ({
@@ -554,137 +586,91 @@ function PieceCard({ piece }: { piece: PieceItem }) {
                 }))
               }
             />
-            <p className="text-sm text-ink/55">{piece.sourceFile}</p>
+            <p className="mt-1 px-2 text-sm text-ink/55">{piece.sourceFile}</p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            <label className="inline-flex items-center gap-2 rounded-full bg-canvas px-3 py-2 text-sm">
-              <input
-                type="checkbox"
-                checked={piece.enabled}
-                onChange={(event) => updatePiece(piece.id, (current) => ({ ...current, enabled: event.target.checked }))}
-              />
-              Activa
-            </label>
-            <Button variant="ghost" className="px-3 py-2" onClick={() => duplicatePiece(piece.id)}>
-              <Copy size={15} className="mr-2" />
-              Duplicar
-            </Button>
+          <div className="flex flex-wrap items-center gap-2 px-2">
+            {piece.warnings.map((warning) => (
+              <span key={warning} className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-warning">
+                {warningLabel(warning)}
+              </span>
+            ))}
+            {tooLarge ? (
+              <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-medium text-danger">
+                Supera el tamaño del material
+              </span>
+            ) : null}
+            {!piece.warnings.length && !tooLarge ? (
+              <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-accentDeep">
+                Válida
+              </span>
+            ) : null}
             <Button variant="ghost" className="px-3 py-2 text-danger" onClick={() => removePiece(piece.id)}>
               <Trash2 size={15} className="mr-2" />
               Eliminar
             </Button>
           </div>
         </div>
+      </div>
 
-        <div className="grid gap-3 lg:grid-cols-4">
-          <Label title="Cantidad">
-            <input
-              className={inputClass}
-              type="number"
-              min={1}
-              value={piece.quantity}
-              onChange={(event) =>
-                updatePiece(piece.id, (current) => ({
-                  ...current,
-                  quantity: Math.max(Number(event.target.value) || 1, 1)
-                }))
-              }
-            />
-          </Label>
-          <Metric
-            label="Medidas"
-            value={`${formatMeasure(piece.geometry.width, material.unit)} x ${formatMeasure(piece.geometry.height, material.unit)}`}
-          />
-          <Metric label="Área" value={formatArea(piece.geometry.area, material.unit)} />
-          <Metric label="Curvas" value={piece.geometry.hasCurves ? "Sí" : "No"} />
-        </div>
+      <div className="flex items-center">
+        <QuantityControl piece={piece} />
+      </div>
 
-        <div className="flex flex-wrap gap-2">
-          {piece.warnings.map((warning) => (
-            <span key={warning} className="rounded-full bg-amber-50 px-3 py-1 text-xs font-medium text-warning">
-              {warningLabel(warning)}
-            </span>
-          ))}
-          {tooLarge ? (
-            <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-medium text-danger">
-              La pieza supera el tamaño del material
-            </span>
-          ) : null}
-          {!piece.warnings.length && !tooLarge ? (
-            <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-accentDeep">Válida</span>
-          ) : null}
-        </div>
+      <div className="text-[22px] font-medium text-ink/85">
+        {formatMeasure(piece.geometry.width, material.unit)}
+      </div>
+
+      <div className="text-[22px] font-medium text-ink/85">
+        {formatMeasure(piece.geometry.height, material.unit)}
       </div>
     </div>
   );
 }
 
-function PiecesOverview({ pieces }: { pieces: PieceItem[] }) {
-  if (!pieces.length) {
-    return (
-      <div className="rounded-[24px] border border-dashed border-line bg-white px-5 py-12 text-center text-sm text-ink/55">
-        Activa piezas para ver una previsualización general aquí.
-      </div>
-    );
+function QuantityControl({ piece }: { piece: PieceItem }) {
+  const updatePiece = useProjectStore((state) => state.updatePiece);
+
+  function setQuantity(next: number) {
+    updatePiece(piece.id, (current) => ({
+      ...current,
+      quantity: Math.max(next, 1)
+    }));
   }
 
-  const totalWidth = pieces.reduce((sum, piece) => sum + piece.geometry.width + 80, 40);
-  const tallest = Math.max(...pieces.map((piece) => piece.geometry.height), 120);
-  let cursorX = 30;
-
   return (
-    <div className="scroll-soft overflow-auto rounded-[24px] border border-line bg-white p-4">
-      <svg
-        width={Math.max(totalWidth, 960)}
-        height={Math.max(tallest + 120, 280)}
-        viewBox={`0 0 ${Math.max(totalWidth, 960)} ${Math.max(tallest + 120, 280)}`}
-        className="min-h-[260px] min-w-full"
+    <div className="inline-flex items-center overflow-hidden rounded-full border border-line bg-white shadow-sm">
+      <button
+        type="button"
+        className="flex h-11 w-12 items-center justify-center bg-[#9a9894] text-[26px] leading-none text-white transition hover:bg-[#888681]"
+        onClick={() => setQuantity(piece.quantity - 1)}
+        aria-label="Restar una pieza"
       >
-        <rect width="100%" height="100%" rx="18" fill="#f8fbf5" />
-        {pieces.map((piece) => {
-          const cardX = cursorX;
-          const previewWidth = piece.geometry.width;
-          const previewHeight = piece.geometry.height;
-          const scale = Math.min(180 / Math.max(previewWidth, 1), 180 / Math.max(previewHeight, 1), 1.6);
-          const frameWidth = Math.max(previewWidth * scale + 36, 190);
-          const frameHeight = Math.max(previewHeight * scale + 70, 220);
-          const previewX = cardX + (frameWidth - previewWidth * scale) / 2;
-          const previewY = 52 + (140 - previewHeight * scale) / 2;
-
-          cursorX += frameWidth + 24;
-
-          return (
-            <g key={piece.id}>
-              <rect
-                x={cardX}
-                y={26}
-                width={frameWidth}
-                height={frameHeight}
-                rx={18}
-                fill="#ffffff"
-                stroke="#dfe4d8"
-              />
-              <text x={cardX + 16} y={52} fontSize="14" fill="#364138" fontWeight="600">
-                {piece.name}
-              </text>
-              <text x={cardX + 16} y={72} fontSize="11" fill="#6d776d">
-                x{piece.quantity} · {piece.sourceFile}
-              </text>
-              <rect
-                x={cardX + 14}
-                y={86}
-                width={frameWidth - 28}
-                height={frameHeight - 104}
-                rx={14}
-                fill="#f5f8f1"
-                stroke="#e3e8de"
-              />
-              <g transform={`translate(${previewX} ${previewY}) scale(${scale})`} dangerouslySetInnerHTML={{ __html: piece.geometry.svgMarkup }} />
-            </g>
-          );
-        })}
-      </svg>
+        -
+      </button>
+      <div className="flex h-11 min-w-[58px] items-center justify-center text-xl">{piece.quantity}</div>
+      <button
+        type="button"
+        className="flex h-11 w-12 items-center justify-center bg-[#9a9894] text-[26px] leading-none text-white transition hover:bg-[#888681]"
+        onClick={() => setQuantity(piece.quantity + 1)}
+        aria-label="Sumar una pieza"
+      >
+        +
+      </button>
+      <button
+        type="button"
+        className="border-l border-line px-4 text-lg font-semibold text-[#314867] transition hover:bg-[#eef3f8]"
+        onClick={() => setQuantity(piece.quantity + 10)}
+      >
+        +10
+      </button>
+      <button
+        type="button"
+        className="border-l border-line px-4 text-lg font-semibold text-[#314867] transition hover:bg-[#eef3f8]"
+        onClick={() => setQuantity(piece.quantity + 100)}
+      >
+        +100
+      </button>
     </div>
   );
 }
