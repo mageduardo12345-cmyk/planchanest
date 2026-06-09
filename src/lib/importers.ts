@@ -54,8 +54,6 @@ function importSvgText(text: string, sourceFile: string): PieceItem[] {
   const probe = createProbeSvg();
   const pieces: PieceItem[] = [];
 
-  allowed.forEach(() => undefined);
-
   Array.from(svgRoot.querySelectorAll(allowed.join(","))).forEach((node, idx) => {
     const imported = document.importNode(node, true) as SVGGraphicsElement;
     probe.appendChild(imported);
@@ -156,10 +154,10 @@ export async function importFiles(files: File[]) {
   const messages: string[] = [];
 
   for (const file of files) {
-    const text = await readFileAsText(file);
     const ext = file.name.split(".").pop()?.toLowerCase();
 
     if (ext === "svg") {
+      const text = await readFileAsText(file);
       const parsed = importSvgText(text, file.name);
       pieces.push(...parsed);
       messages.push(parsed.length ? "Archivo cargado correctamente." : "No se detectaron piezas cerradas.");
@@ -167,6 +165,7 @@ export async function importFiles(files: File[]) {
     }
 
     if (ext === "dxf") {
+      const text = await readFileAsText(file);
       const parsed = importDxfText(text, file.name);
       pieces.push(...parsed);
       messages.push(parsed.length ? "Archivo cargado correctamente." : "El archivo no contiene geometrías válidas.");
@@ -174,7 +173,9 @@ export async function importFiles(files: File[]) {
     }
 
     if (ext === "dwg") {
-      messages.push("No fue posible leer el archivo DWG localmente. Convierte a DXF para esta versión.");
+      messages.push(
+        "DWG no se abre directo en esta versión porque es un formato binario propietario. Convierte el archivo a DXF para importarlo aquí."
+      );
       continue;
     }
 

@@ -41,7 +41,7 @@ type Store = ProjectState & {
   reset: () => void;
 };
 
-const persisted = typeof window !== "undefined" ? loadProject() : null;
+const persisted = typeof window !== "undefined" ? normalizePersisted(loadProject()) : null;
 
 export const useProjectStore = create<Store>((set, get) => ({
   ...(persisted ?? defaultState),
@@ -84,4 +84,16 @@ function setAndPersist(
     messages: partial.messages ?? get().messages,
     running: partial.running ?? get().running
   });
+}
+
+function normalizePersisted(state: ProjectState | null) {
+  if (!state) {
+    return null;
+  }
+
+  const validSteps: AppStep[] = ["carga", "piezas", "material", "resultado"];
+  return {
+    ...state,
+    step: validSteps.includes(state.step) ? state.step : "carga"
+  };
 }

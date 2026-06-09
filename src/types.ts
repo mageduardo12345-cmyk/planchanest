@@ -1,10 +1,4 @@
-export type AppStep =
-  | "carga"
-  | "piezas"
-  | "material"
-  | "configuracion"
-  | "nesting"
-  | "resultado";
+export type AppStep = "carga" | "piezas" | "material" | "resultado";
 
 export type Unit = "mm" | "cm" | "in";
 

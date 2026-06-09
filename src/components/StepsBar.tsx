@@ -2,21 +2,19 @@ import type { AppStep } from "../types";
 import clsx from "./utils-clsx";
 
 const labels: Record<AppStep, string> = {
-  carga: "Cargar",
-  piezas: "Piezas",
-  material: "Material",
-  configuracion: "Parámetros",
-  nesting: "Nesting",
+  carga: "Cargar archivos",
+  piezas: "Elegir piezas",
+  material: "Material y ajuste",
   resultado: "Resultado"
 };
 
-const order: AppStep[] = ["carga", "piezas", "material", "configuracion", "nesting", "resultado"];
+const order: AppStep[] = ["carga", "piezas", "material", "resultado"];
 
 export default function StepsBar({ current }: { current: AppStep }) {
   const currentIndex = order.indexOf(current);
 
   return (
-    <div className="grid gap-2 md:grid-cols-6">
+    <div className="grid gap-2 md:grid-cols-4">
       {order.map((step, index) => (
         <div
           key={step}
@@ -27,7 +25,7 @@ export default function StepsBar({ current }: { current: AppStep }) {
               : "border-line bg-[#fafcf8] text-ink/55"
           )}
         >
-          <p className="text-[10px] uppercase tracking-[0.18em]">Etapa {index + 1}</p>
+          <p className="text-[10px] uppercase tracking-[0.18em]">Paso {index + 1}</p>
           <p className="mt-1 font-semibold">{labels[step]}</p>
         </div>
       ))}

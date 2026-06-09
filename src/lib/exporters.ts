@@ -62,44 +62,56 @@ export function downloadSvg(
   URL.revokeObjectURL(url);
 }
 
+function loadSvgImage(svg: string) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const blob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(image);
+    };
+
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("No fue posible renderizar el SVG para el PDF."));
+    };
+
+    image.src = url;
+  });
+}
+
 export async function downloadPdf(
   pieces: PieceItem[],
   material: MaterialConfig,
   result: NestingResult
 ) {
+  const sceneWidth = (result.usedSheets || 1) * (material.width + 40);
+  const sceneHeight = material.height + 20;
+  const svg = buildResultSvg(pieces, material, result);
+  const image = await loadSvgImage(svg);
+  const canvas = document.createElement("canvas");
+  const scaleFactor = 2;
+
+  canvas.width = Math.max(Math.round(sceneWidth * scaleFactor), 1);
+  canvas.height = Math.max(Math.round(sceneHeight * scaleFactor), 1);
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("No fue posible preparar el PDF.");
+  }
+
+  context.fillStyle = "#eef2ea";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+
   const doc = new jsPDF({
-    orientation: material.width >= material.height ? "landscape" : "portrait",
+    orientation: sceneWidth >= sceneHeight ? "landscape" : "portrait",
     unit: "mm",
-    format: [Math.max(material.width, 210), Math.max(material.height, 148)]
+    format: [sceneWidth, sceneHeight]
   });
 
-  doc.setFontSize(16);
-  doc.text("Resultado de nesting", 12, 16);
-  doc.setFontSize(10);
-  doc.text(`Material: ${material.name}`, 12, 24);
-  doc.text(`Placas usadas: ${result.usedSheets}`, 12, 30);
-  doc.text(`Aprovechamiento: ${result.utilization.toFixed(1)}%`, 12, 36);
-
-  const pageWidth = doc.internal.pageSize.getWidth() - 24;
-  const pageHeight = doc.internal.pageSize.getHeight() - 54;
-  const scale = Math.min(pageWidth / material.width, pageHeight / material.height);
-
-  result.placements
-    .filter((placement) => placement.sheetIndex === 0)
-    .forEach((placement) => {
-      const piece = findPiece(pieces, placement.pieceId);
-      if (!piece) {
-        return;
-      }
-
-      const x = 12 + placement.x * scale;
-      const y = 44 + placement.y * scale;
-      doc.setDrawColor(47, 133, 90);
-      doc.setFillColor(214, 237, 222);
-      doc.roundedRect(x, y, piece.geometry.width * scale, piece.geometry.height * scale, 2, 2, "FD");
-      doc.setTextColor(29, 42, 34);
-      doc.text(piece.name, x + 2, y + 5);
-    });
-
+  doc.addImage(canvas.toDataURL("image/png"), "PNG", 0, 0, sceneWidth, sceneHeight);
   doc.save("nesting-resultado.pdf");
 }
