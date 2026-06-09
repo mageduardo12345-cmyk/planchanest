@@ -5,12 +5,13 @@ import {
   Copy,
   Download,
   FileUp,
-  Trash2,
+  Gauge,
   Play,
   RefreshCcw,
   Ruler,
   Settings2,
-  Sparkles
+  ShieldCheck,
+  Trash2
 } from "lucide-react";
 import PreviewCanvas from "./components/PreviewCanvas";
 import StepsBar from "./components/StepsBar";
@@ -29,6 +30,9 @@ const presets = [
   { label: "900 x 1200 mm", width: 900, height: 1200 }
 ];
 
+const inputClass =
+  "rounded-2xl border border-line bg-white px-4 py-3 text-ink outline-none transition focus:border-accent/50 focus:ring-2 focus:ring-accent/15";
+
 export default function App() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [progress, setProgress] = useState(0);
@@ -44,7 +48,7 @@ export default function App() {
 
     if (store.pieces.length) {
       setProgress(0);
-      setStatus("Esperando archivos.");
+      setStatus("Listo para calcular nesting.");
     }
   }, [store.result, store.pieces.length]);
 
@@ -68,6 +72,7 @@ export default function App() {
     const { pieces, messages } = await importFiles([demo]);
     store.setPieces(mergePiecesByShape(pieces));
     store.setMessages(messages);
+    store.setResult(null);
     store.setStep("piezas");
   }
 
@@ -91,32 +96,49 @@ export default function App() {
   return (
     <div className="min-h-screen bg-transparent px-4 py-6 text-ink lg:px-8">
       <div className="mx-auto flex max-w-[1520px] flex-col gap-6">
-        <header className="grid gap-5 lg:grid-cols-[1.6fr_1fr]">
+        <header className="grid gap-5 lg:grid-cols-[1.55fr_0.95fr]">
           <Card className="overflow-hidden">
-            <div className="flex flex-col gap-5 p-7">
+            <div className="flex flex-col gap-6 p-7">
               <div className="flex items-start justify-between gap-4">
                 <div>
-                  <p className="text-xs uppercase tracking-[0.22em] text-accentDeep/70">
-                    PlanchaNest para CNC y corte láser
+                  <p className="inline-flex rounded-full border border-accent/35 bg-accent/10 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.2em] text-accentDeep">
+                    Inspirado en Nest&amp;Cut
                   </p>
-                  <h1 className="mt-3 text-3xl font-semibold tracking-tight md:text-5xl">
-                    Flujo técnico, local y listo para producción.
+                  <h1 className="mt-4 max-w-3xl text-3xl font-semibold tracking-tight md:text-5xl">
+                    PlanchaNest para CNC y láser con una interfaz más clara y operativa.
                   </h1>
                   <p className="mt-3 max-w-2xl text-sm leading-6 text-ink/68 md:text-base">
                     Importa piezas, revisa geometrías, configura material y genera un acomodo práctico
-                    sin depender de servicios externos.
+                    desde una pantalla limpia, sobria y fácil de usar.
                   </p>
                 </div>
-                <div className="rounded-[24px] border border-accent/20 bg-accent/10 p-4 text-accentDeep">
-                  <Sparkles size={26} />
+                <div className="rounded-[22px] border border-accent/30 bg-accent/10 p-4 text-accentDeep">
+                  <ShieldCheck size={26} />
                 </div>
               </div>
+
+              <div className="flex flex-wrap gap-2 text-xs text-ink/65">
+                <span className="rounded-full border border-line bg-[#fafcf8] px-3 py-2">Local primero</span>
+                <span className="rounded-full border border-line bg-[#fafcf8] px-3 py-2">SVG y DXF</span>
+                <span className="rounded-full border border-line bg-[#fafcf8] px-3 py-2">Parámetros claros</span>
+                <span className="rounded-full border border-line bg-[#fafcf8] px-3 py-2">Resultado exportable</span>
+              </div>
+
               <StepsBar current={store.step} />
             </div>
           </Card>
 
-          <Card>
+          <Card className="border-shell bg-shell text-white">
             <div className="grid h-full gap-4 p-6">
+              <div className="flex items-center gap-3 rounded-[20px] border border-white/10 bg-white/5 px-4 py-4">
+                <div className="rounded-full bg-accent p-3 text-[#233117]">
+                  <Gauge size={18} />
+                </div>
+                <div>
+                  <p className="text-xs uppercase tracking-[0.18em] text-white/55">Estado del proyecto</p>
+                  <p className="mt-1 text-lg font-semibold">Panel rápido de producción</p>
+                </div>
+              </div>
               <Metric label="Piezas activas" value={enabledPieces.length} tone="accent" />
               <Metric label="Advertencias" value={invalidPieces.length} tone={invalidPieces.length ? "warning" : "default"} />
               <Metric
@@ -127,12 +149,12 @@ export default function App() {
           </Card>
         </header>
 
-        <main className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
+        <main className="grid gap-6 xl:grid-cols-[1.08fr_0.92fr]">
           <div className="flex flex-col gap-6">
             <Card className="p-6">
               <div className="grid gap-4 md:grid-cols-[1.2fr_0.8fr]">
                 <div
-                  className="rounded-[28px] border border-dashed border-accent/30 bg-gradient-to-br from-white to-[#f1f7ef] p-6"
+                  className="rounded-[28px] border border-dashed border-accent/35 bg-gradient-to-br from-white to-[#f4f8ef] p-6"
                   onDragOver={(event) => event.preventDefault()}
                   onDrop={(event) => {
                     event.preventDefault();
@@ -141,7 +163,7 @@ export default function App() {
                 >
                   <div className="flex h-full flex-col justify-between gap-6">
                     <div>
-                      <div className="inline-flex rounded-2xl bg-accent/10 p-3 text-accentDeep">
+                      <div className="inline-flex rounded-[20px] border border-accent/30 bg-accent/10 p-3 text-accentDeep">
                         <FileUp size={26} />
                       </div>
                       <h2 className="mt-4 text-2xl font-semibold">Cargar piezas</h2>
@@ -150,6 +172,7 @@ export default function App() {
                         localmente. `DWG` queda documentado con conversión previa a `DXF`.
                       </p>
                     </div>
+
                     <div className="flex flex-wrap gap-3">
                       <input
                         ref={inputRef}
@@ -164,13 +187,14 @@ export default function App() {
                         Cargar demo
                       </Button>
                     </div>
+
                     <p className="text-xs uppercase tracking-[0.18em] text-ink/45">
                       Formatos: SVG, DXF, DWG
                     </p>
                   </div>
                 </div>
 
-                <div className="rounded-[28px] border border-line bg-white p-5">
+                <div className="rounded-[28px] border border-line bg-[#fcfdfb] p-5">
                   <h3 className="flex items-center gap-2 text-lg font-semibold">
                     <AlertCircle size={18} />
                     Estado de importación
@@ -178,7 +202,7 @@ export default function App() {
                   <div className="mt-4 space-y-3">
                     {store.messages.length ? (
                       store.messages.map((message, index) => (
-                        <p key={`${message}-${index}`} className="rounded-2xl bg-canvas px-3 py-2 text-sm text-ink/72">
+                        <p key={`${message}-${index}`} className="rounded-[18px] border border-line/70 bg-white px-3 py-2 text-sm text-ink/72">
                           {message}
                         </p>
                       ))
@@ -228,7 +252,8 @@ export default function App() {
               <div className="mt-5 grid gap-4 md:grid-cols-2">
                 <Label title="Ancho">
                   <input
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
+                    inputMode="decimal"
                     type="number"
                     value={store.material.width}
                     onChange={(event) =>
@@ -238,7 +263,8 @@ export default function App() {
                 </Label>
                 <Label title="Alto">
                   <input
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
+                    inputMode="decimal"
                     type="number"
                     value={store.material.height}
                     onChange={(event) =>
@@ -248,7 +274,7 @@ export default function App() {
                 </Label>
                 <Label title="Unidad">
                   <select
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
                     value={store.material.unit}
                     onChange={(event) =>
                       store.setMaterial({ ...store.material, unit: event.target.value as typeof store.material.unit })
@@ -261,7 +287,7 @@ export default function App() {
                 </Label>
                 <Label title="Cantidad de placas">
                   <input
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
                     type="number"
                     min={1}
                     value={store.material.sheetCount}
@@ -288,7 +314,8 @@ export default function App() {
               <div className="mt-6 grid gap-4 md:grid-cols-2">
                 <Label title="Margen de pieza">
                   <input
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
+                    inputMode="decimal"
                     type="number"
                     value={store.nesting.pieceGap}
                     onChange={(event) =>
@@ -298,7 +325,8 @@ export default function App() {
                 </Label>
                 <Label title="Margen al borde">
                   <input
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
+                    inputMode="decimal"
                     type="number"
                     value={store.nesting.edgeGap}
                     onChange={(event) =>
@@ -308,7 +336,8 @@ export default function App() {
                 </Label>
                 <Label title="Kerf">
                   <input
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
+                    inputMode="decimal"
                     type="number"
                     step="0.01"
                     value={store.nesting.kerf}
@@ -319,7 +348,7 @@ export default function App() {
                 </Label>
                 <Label title="Rotaciones">
                   <select
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
                     value={store.nesting.rotations}
                     onChange={(event) =>
                       store.setNesting({ ...store.nesting, rotations: event.target.value as typeof store.nesting.rotations })
@@ -333,7 +362,7 @@ export default function App() {
                 </Label>
                 <Label title="Calidad del nesting">
                   <select
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
                     value={store.nesting.quality}
                     onChange={(event) =>
                       store.setNesting({ ...store.nesting, quality: event.target.value as typeof store.nesting.quality })
@@ -346,7 +375,7 @@ export default function App() {
                 </Label>
                 <Label title="Tiempo máximo">
                   <select
-                    className="rounded-2xl border border-line bg-white px-4 py-3"
+                    className={inputClass}
                     value={store.nesting.maxTimeMs}
                     onChange={(event) =>
                       store.setNesting({ ...store.nesting, maxTimeMs: Number(event.target.value) || 30000 })
@@ -435,7 +464,7 @@ export default function App() {
               </div>
 
               {store.result ? (
-                <div className="mt-6 grid gap-4 rounded-[24px] border border-line bg-white p-4">
+                <div className="mt-6 grid gap-4 rounded-[24px] border border-line bg-[#fcfdfb] p-4">
                   <div className="grid gap-3 md:grid-cols-2">
                     <Metric label="Piezas acomodadas" value={store.result.placements.length} />
                     <Metric
@@ -474,16 +503,16 @@ function PieceCard({ piece }: { piece: PieceItem }) {
   const removePiece = useProjectStore((state) => state.removePiece);
   const material = useProjectStore((state) => state.material);
 
-  const tooLarge =
-    piece.geometry.width > material.width || piece.geometry.height > material.height;
+  const tooLarge = piece.geometry.width > material.width || piece.geometry.height > material.height;
 
   return (
-    <div className="grid gap-4 rounded-[26px] border border-line bg-white p-4 md:grid-cols-[120px_1fr]">
-      <div className="flex h-[110px] items-center justify-center rounded-[22px] bg-canvas p-3">
+    <div className="grid gap-4 rounded-[26px] border border-line bg-[#fcfdfb] p-4 md:grid-cols-[120px_1fr]">
+      <div className="flex h-[110px] items-center justify-center rounded-[20px] border border-line/70 bg-canvas p-3">
         <svg viewBox={`0 0 ${piece.geometry.width + 12} ${piece.geometry.height + 12}`} className="h-full w-full">
           <g transform="translate(6 6)" dangerouslySetInnerHTML={{ __html: piece.geometry.svgMarkup }} />
         </svg>
       </div>
+
       <div className="grid gap-4">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
@@ -499,6 +528,7 @@ function PieceCard({ piece }: { piece: PieceItem }) {
             />
             <p className="text-sm text-ink/55">{piece.sourceFile}</p>
           </div>
+
           <div className="flex flex-wrap gap-2">
             <label className="inline-flex items-center gap-2 rounded-full bg-canvas px-3 py-2 text-sm">
               <input
@@ -522,7 +552,7 @@ function PieceCard({ piece }: { piece: PieceItem }) {
         <div className="grid gap-3 md:grid-cols-4">
           <Label title="Cantidad">
             <input
-              className="rounded-2xl border border-line bg-white px-3 py-2"
+              className={inputClass}
               type="number"
               min={1}
               value={piece.quantity}
@@ -534,7 +564,10 @@ function PieceCard({ piece }: { piece: PieceItem }) {
               }
             />
           </Label>
-          <Metric label="Medidas" value={`${formatMeasure(piece.geometry.width, material.unit)} x ${formatMeasure(piece.geometry.height, material.unit)}`} />
+          <Metric
+            label="Medidas"
+            value={`${formatMeasure(piece.geometry.width, material.unit)} x ${formatMeasure(piece.geometry.height, material.unit)}`}
+          />
           <Metric label="Área" value={formatArea(piece.geometry.area, material.unit)} />
           <Metric label="Curvas" value={piece.geometry.hasCurves ? "Sí" : "No"} />
         </div>

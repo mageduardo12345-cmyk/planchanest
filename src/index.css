@@ -3,16 +3,18 @@
 @tailwind utilities;
 
 :root {
-  color: #1d2a22;
+  color: #353535;
   background:
-    radial-gradient(circle at top left, rgba(47, 133, 90, 0.14), transparent 28%),
-    linear-gradient(180deg, #f6faf4 0%, #eef2ea 100%);
+    radial-gradient(circle at top left, rgba(126, 211, 33, 0.16), transparent 26%),
+    radial-gradient(circle at right 12%, rgba(126, 211, 33, 0.08), transparent 24%),
+    linear-gradient(180deg, #f8faf6 0%, #eef2eb 100%);
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
+  font-family: Roboto, "Segoe UI", ui-sans-serif, system-ui, sans-serif;
 }
 
 * {
@@ -21,8 +23,19 @@ body {
 
 button,
 input,
-select {
+select,
+textarea {
   font: inherit;
+}
+
+input,
+select,
+textarea {
+  color: #353535;
+}
+
+::selection {
+  background: rgba(126, 211, 33, 0.24);
 }
 
 .scroll-soft::-webkit-scrollbar {

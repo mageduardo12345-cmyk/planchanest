@@ -19,7 +19,7 @@ export default function PreviewCanvas({
   const usedSheets = result?.usedSheets || 1;
 
   return (
-    <div className="scroll-soft overflow-auto rounded-[28px] border border-line bg-[#f4f8f1] p-5">
+    <div className="scroll-soft overflow-auto rounded-[24px] border border-line bg-[#f5f8f1] p-5">
       <svg
         width={(material.width + 60) * usedSheets * scale}
         height={(material.height + 40) * scale}
@@ -34,12 +34,12 @@ export default function PreviewCanvas({
               y={0}
               width={material.width}
               height={material.height}
-              rx={18}
-              fill="#fcfdfb"
-              stroke="#97ab9b"
+              rx={14}
+              fill="#ffffff"
+              stroke="#aab5a1"
               strokeWidth={3}
             />
-            <text x={20} y={30} fontSize={18} fill="#4a5f50">
+            <text x={20} y={30} fontSize={18} fill="#4f5b49">
               Placa {sheetIndex + 1}
             </text>
             {placements
@@ -61,10 +61,10 @@ export default function PreviewCanvas({
                       y={0}
                       width={piece.geometry.width}
                       height={piece.geometry.height}
-                      rx={10}
-                      fill="rgba(47, 133, 90, 0.08)"
-                      stroke="rgba(47, 133, 90, 0.25)"
-                      strokeDasharray="10 8"
+                      rx={8}
+                      fill="rgba(126, 211, 33, 0.09)"
+                      stroke="rgba(93, 161, 18, 0.35)"
+                      strokeDasharray="8 6"
                     />
                     <g dangerouslySetInnerHTML={{ __html: markup }} />
                   </g>

@@ -6,7 +6,7 @@ export function Card({
   className
 }: PropsWithChildren<{ className?: string }>) {
   return (
-    <section className={clsx("rounded-[28px] border border-line bg-panel shadow-panel", className)}>
+    <section className={clsx("rounded-[26px] border border-line/90 bg-panel shadow-panel", className)}>
       {children}
     </section>
   );
@@ -22,13 +22,14 @@ export function Button({
     variant?: "primary" | "secondary" | "ghost";
   }
 >) {
-  const base = "inline-flex items-center justify-center rounded-2xl px-4 py-3 text-sm font-semibold transition";
+  const base =
+    "inline-flex items-center justify-center rounded-full px-5 py-3 text-sm font-semibold transition duration-150 disabled:cursor-not-allowed";
   const palette =
     variant === "primary"
-      ? "bg-accent text-white hover:bg-accentDeep disabled:bg-slate-300"
+      ? "bg-accent text-[#213015] hover:bg-accentDeep hover:text-white disabled:bg-slate-300 disabled:text-slate-500"
       : variant === "secondary"
-        ? "border border-line bg-white text-ink hover:bg-slate-50"
-        : "text-ink/70 hover:bg-white";
+        ? "border border-accent/50 bg-white text-ink hover:border-accent hover:bg-accent/10"
+        : "text-ink/70 hover:bg-accent/10";
   return (
     <button className={clsx(base, palette, className)} {...props}>
       {children}
@@ -39,7 +40,7 @@ export function Button({
 export function Label({ title, children }: PropsWithChildren<{ title: string }>) {
   return (
     <label className="flex flex-col gap-2 text-sm text-ink/72">
-      <span className="font-medium">{title}</span>
+      <span className="text-[12px] font-semibold uppercase tracking-[0.14em] text-ink/55">{title}</span>
       {children}
     </label>
   );
@@ -57,9 +58,9 @@ export function Metric({
   return (
     <div
       className={clsx(
-        "rounded-2xl border px-4 py-3",
+        "rounded-[22px] border px-4 py-3",
         tone === "accent"
-          ? "border-accent/20 bg-accent/10"
+          ? "border-accent/25 bg-accent/10"
           : tone === "warning"
             ? "border-warning/30 bg-amber-50"
             : "border-line bg-white"
