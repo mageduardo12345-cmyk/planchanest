@@ -177,11 +177,11 @@ export default function App() {
                         <div className="inline-flex rounded-[20px] border border-accent/30 bg-accent/10 p-3 text-accentDeep">
                           <FileUp size={26} />
                         </div>
-                        <h2 className="mt-4 text-2xl font-semibold">Paso 1. Cargar archivos</h2>
-                        <p className="mt-2 max-w-xl text-sm leading-6 text-ink/68">
-                          Arrastra tus archivos aquí o usa el selector. Puedes trabajar con `SVG` y
-                          `DXF`. Si traes `DWG`, primero conviértelo a `DXF`.
-                        </p>
+                      <h2 className="mt-4 text-2xl font-semibold">Paso 1. Cargar archivos</h2>
+                      <p className="mt-2 max-w-xl text-sm leading-6 text-ink/68">
+                        Arrastra tus archivos aquí o usa el selector. Puedes trabajar con `SVG`,
+                        `DXF` y ahora también `DWG`.
+                      </p>
                       </div>
 
                       <div className="flex flex-wrap gap-3">
@@ -212,12 +212,12 @@ export default function App() {
                     </h3>
                     <div className="mt-4 space-y-3">
                       <p className="rounded-[18px] border border-line/70 bg-white px-3 py-3 text-sm text-ink/72">
-                        `DWG` no se abre directo porque es un formato binario propietario y esta app
-                        trabaja localmente en el navegador sin un conversor CAD embebido.
+                        `DWG` ya se intenta abrir directo dentro de la app usando un lector local en
+                        navegador.
                       </p>
                       <p className="rounded-[18px] border border-line/70 bg-white px-3 py-3 text-sm text-ink/72">
-                        Para `DWG`, exporta o guarda como `DXF` desde AutoCAD, DraftSight, LibreCAD u otro
-                        conversor y luego súbelo aquí.
+                        Si un `DWG` trae objetos o versiones no compatibles, la mejor salida sigue
+                        siendo guardarlo como `DXF` y volverlo a subir.
                       </p>
                       {store.messages.map((message, index) => (
                         <p key={`${message}-${index}`} className="rounded-[18px] border border-line/70 bg-white px-3 py-2 text-sm text-ink/72">
@@ -245,6 +245,24 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="sticky top-4 z-10 mt-5 rounded-[22px] border border-line bg-white/95 p-4 shadow-panel backdrop-blur">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="text-sm text-ink/65">
+                      Ajusta aquí tus piezas y luego continúa sin bajar hasta el fondo.
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <Button variant="secondary" onClick={() => goToStep("carga")}>
+                        <ArrowLeft size={16} className="mr-2" />
+                        Volver a carga
+                      </Button>
+                      <Button onClick={() => goToStep("material")} disabled={!canContinueFromPieces}>
+                        Continuar a material
+                        <ArrowRight size={16} className="ml-2" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="mt-5 grid gap-4">
                   {store.pieces.length ? (
                     store.pieces.map((piece) => <PieceCard key={piece.id} piece={piece} />)
@@ -253,17 +271,6 @@ export default function App() {
                       Aún no hay piezas cargadas.
                     </div>
                   )}
-                </div>
-
-                <div className="mt-6 flex flex-wrap justify-between gap-3">
-                  <Button variant="secondary" onClick={() => goToStep("carga")}>
-                    <ArrowLeft size={16} className="mr-2" />
-                    Volver a carga
-                  </Button>
-                  <Button onClick={() => goToStep("material")} disabled={!canContinueFromPieces}>
-                    Continuar a material
-                    <ArrowRight size={16} className="ml-2" />
-                  </Button>
                 </div>
               </Card>
             ) : null}
@@ -508,8 +515,8 @@ export default function App() {
               </div>
               <div className="mt-4 space-y-3 text-sm text-ink/72">
                 <p className="rounded-[18px] border border-line/70 bg-white px-4 py-3">
-                  `DWG` no se importa directo porque esta versión corre totalmente en el navegador y no trae
-                  un lector de `DWG` embebido. `DXF` sí porque es más abierto y tenemos parser local.
+                  `DWG` ya se procesa dentro del navegador, pero algunos archivos complejos pueden dar
+                  mejor resultado si se convierten a `DXF`.
                 </p>
                 <p className="rounded-[18px] border border-line/70 bg-white px-4 py-3">
                   El PDF ahora sale solo con el resultado visual del acomodo, sin encabezados ni texto extra.

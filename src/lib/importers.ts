@@ -1,5 +1,6 @@
 import DxfParser from "dxf-parser";
 import { buildPieceGeometry } from "./geometry";
+import { convertDwgToSvg } from "./dwg";
 import { slugId } from "./utils";
 import type { GeometryWarning, PieceItem } from "../types";
 
@@ -173,9 +174,20 @@ export async function importFiles(files: File[]) {
     }
 
     if (ext === "dwg") {
-      messages.push(
-        "DWG no se abre directo en esta versión porque es un formato binario propietario. Convierte el archivo a DXF para importarlo aquí."
-      );
+      try {
+        const svg = await convertDwgToSvg(await file.arrayBuffer());
+        const parsed = importSvgText(svg, file.name);
+        pieces.push(...parsed);
+        messages.push(
+          parsed.length
+            ? "Archivo DWG cargado correctamente."
+            : "El DWG se abrió, pero no se detectaron piezas utilizables."
+        );
+      } catch {
+        messages.push(
+          "No fue posible abrir este DWG. Intenta guardarlo como DXF si el archivo usa objetos no compatibles."
+        );
+      }
       continue;
     }
 

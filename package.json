@@ -9,6 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@mlightcad/libredwg-web": "^0.7.2",
     "dxf-parser": "^1.1.2",
     "jspdf": "^3.0.2",
     "lucide-react": "^0.525.0",
