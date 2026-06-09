@@ -190,7 +190,7 @@ export async function downloadPdf(pieces: PieceItem[], material: MaterialConfig,
   const svg = buildResultSvg(pieces, material, result);
   const image = await loadSvgImage(svg);
   const canvas = document.createElement("canvas");
-  const scaleFactor = 2;
+  const scaleFactor = Math.max(6, Math.min(14, 12000 / Math.max(sceneWidth, sceneHeight, 1)));
 
   canvas.width = Math.max(Math.round(sceneWidth * scaleFactor), 1);
   canvas.height = Math.max(Math.round(sceneHeight * scaleFactor), 1);
@@ -200,6 +200,8 @@ export async function downloadPdf(pieces: PieceItem[], material: MaterialConfig,
     throw new Error("No fue posible preparar el PDF.");
   }
 
+  context.imageSmoothingEnabled = true;
+  context.imageSmoothingQuality = "high";
   context.clearRect(0, 0, canvas.width, canvas.height);
   context.drawImage(image, 0, 0, canvas.width, canvas.height);
 
@@ -280,31 +282,16 @@ function buildPolylineEntity(points: Point[], closed: boolean, sceneHeight: numb
   ].join("");
 }
 
-function buildCircleEntity(center: Point, radius: number, sceneHeight: number) {
-  return [
-    dxfPair(0, "CIRCLE"),
-    dxfPair(8, 0),
-    dxfPair(10, center.x),
-    dxfPair(20, toDxfY(sceneHeight, center.y)),
-    dxfPair(30, 0),
-    dxfPair(40, radius)
-  ].join("");
-}
-
-function buildEllipseEntity(center: Point, majorAxisEnd: Point, ratio: number, sceneHeight: number) {
-  return [
-    dxfPair(0, "ELLIPSE"),
-    dxfPair(8, 0),
-    dxfPair(10, center.x),
-    dxfPair(20, toDxfY(sceneHeight, center.y)),
-    dxfPair(30, 0),
-    dxfPair(11, majorAxisEnd.x - center.x),
-    dxfPair(21, -(majorAxisEnd.y - center.y)),
-    dxfPair(31, 0),
-    dxfPair(40, ratio),
-    dxfPair(41, 0),
-    dxfPair(42, Math.PI * 2)
-  ].join("");
+function sampleEllipsePoints(cx: number, cy: number, rx: number, ry: number, segments: number) {
+  const points: Point[] = [];
+  for (let index = 0; index <= segments; index += 1) {
+    const angle = (Math.PI * 2 * index) / segments;
+    points.push({
+      x: cx + rx * Math.cos(angle),
+      y: cy + ry * Math.sin(angle)
+    });
+  }
+  return points;
 }
 
 function buildEntitiesFromElement(
@@ -345,43 +332,28 @@ function buildEntitiesFromElement(
       x: Number(element.getAttribute("x2") ?? 0),
       y: Number(element.getAttribute("y2") ?? 0)
     });
-    output.push(
-      [
-        dxfPair(0, "LINE"),
-        dxfPair(8, 0),
-        dxfPair(10, start.x),
-        dxfPair(20, toDxfY(sceneHeight, start.y)),
-        dxfPair(30, 0),
-        dxfPair(11, end.x),
-        dxfPair(21, toDxfY(sceneHeight, end.y)),
-        dxfPair(31, 0)
-      ].join("")
-    );
+    output.push(buildPolylineEntity([start, end], false, sceneHeight));
     return;
   }
 
   if (tag === "circle") {
-    const center = applyMatrix(nextMatrix, {
-      x: Number(element.getAttribute("cx") ?? 0),
-      y: Number(element.getAttribute("cy") ?? 0)
-    });
-    const edge = applyMatrix(nextMatrix, {
-      x: Number(element.getAttribute("cx") ?? 0) + Number(element.getAttribute("r") ?? 0),
-      y: Number(element.getAttribute("cy") ?? 0)
-    });
-    const radius = Math.hypot(edge.x - center.x, edge.y - center.y);
-    output.push(buildCircleEntity(center, radius, sceneHeight));
+    const cx = Number(element.getAttribute("cx") ?? 0);
+    const cy = Number(element.getAttribute("cy") ?? 0);
+    const radius = Number(element.getAttribute("r") ?? 0);
+    const points = sampleEllipsePoints(cx, cy, radius, radius, 96).map((point) => applyMatrix(nextMatrix, point));
+    output.push(buildPolylineEntity(points, true, sceneHeight));
     return;
   }
 
   if (tag === "ellipse") {
-    const cx = Number(element.getAttribute("cx") ?? 0);
-    const cy = Number(element.getAttribute("cy") ?? 0);
-    const rx = Number(element.getAttribute("rx") ?? 0);
-    const ry = Number(element.getAttribute("ry") ?? 0);
-    const center = applyMatrix(nextMatrix, { x: cx, y: cy });
-    const majorAxisEnd = applyMatrix(nextMatrix, { x: cx + rx, y: cy });
-    output.push(buildEllipseEntity(center, majorAxisEnd, rx === 0 ? 1 : ry / rx, sceneHeight));
+    const points = sampleEllipsePoints(
+      Number(element.getAttribute("cx") ?? 0),
+      Number(element.getAttribute("cy") ?? 0),
+      Number(element.getAttribute("rx") ?? 0),
+      Number(element.getAttribute("ry") ?? 0),
+      96
+    ).map((point) => applyMatrix(nextMatrix, point));
+    output.push(buildPolylineEntity(points, true, sceneHeight));
     return;
   }
 
@@ -434,7 +406,13 @@ function buildResultDxf(pieces: PieceItem[], material: MaterialConfig, result: N
     dxfPair(0, "SECTION"),
     dxfPair(2, "HEADER"),
     dxfPair(9, "$ACADVER"),
-    dxfPair(1, "AC1015"),
+    dxfPair(1, "AC1009"),
+    dxfPair(0, "ENDSEC"),
+    dxfPair(0, "SECTION"),
+    dxfPair(2, "TABLES"),
+    dxfPair(0, "ENDSEC"),
+    dxfPair(0, "SECTION"),
+    dxfPair(2, "BLOCKS"),
     dxfPair(0, "ENDSEC"),
     dxfPair(0, "SECTION"),
     dxfPair(2, "ENTITIES"),
