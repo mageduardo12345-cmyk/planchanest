@@ -6,7 +6,6 @@ import {
   Boxes,
   Download,
   FileUp,
-  Gauge,
   Play,
   RefreshCcw,
   Ruler,
@@ -16,19 +15,19 @@ import {
 import PreviewCanvas from "./components/PreviewCanvas";
 import StepsBar from "./components/StepsBar";
 import { Button, Card, Label, Metric } from "./components/ui";
-import { downloadPdf, downloadSvg } from "./lib/exporters";
+import { downloadDxf, downloadPdf, downloadSvg } from "./lib/exporters";
 import { normalizeSvgMarkup } from "./lib/geometry";
 import { importFiles } from "./lib/importers";
 import { runNesting } from "./lib/nesting";
-import { formatArea, formatMeasure } from "./lib/units";
+import { formatMeasure } from "./lib/units";
 import { useProjectStore } from "./state/useProjectStore";
 import type { AppStep, PieceItem } from "./types";
 
 const presets = [
+  { label: "900 x 600 mm", width: 900, height: 600 },
   { label: "1220 x 2440 mm", width: 1220, height: 2440 },
   { label: "1200 x 2400 mm", width: 1200, height: 2400 },
-  { label: "600 x 900 mm", width: 600, height: 900 },
-  { label: "900 x 1200 mm", width: 900, height: 1200 }
+  { label: "600 x 900 mm", width: 600, height: 900 }
 ];
 
 const inputClass =
@@ -94,10 +93,16 @@ export default function App() {
   }
 
   const enabledPieces = store.pieces.filter((piece) => piece.enabled);
-  const invalidPieces = store.pieces.filter((piece) => piece.warnings.length > 0);
   const canContinueFromPieces = enabledPieces.length > 0;
   const canContinueFromMaterial =
     canContinueFromPieces && store.material.width > 0 && store.material.height > 0;
+  const previewReference = store.pieces.reduce(
+    (acc, piece) => ({
+      width: Math.max(acc.width, piece.geometry.width),
+      height: Math.max(acc.height, piece.geometry.height)
+    }),
+    { width: 1, height: 1 }
+  );
   const resultMetrics = store.result
     ? [
         { label: "Aprovechamiento", value: `${store.result.utilization.toFixed(1)}%`, tone: "accent" as const },
@@ -118,7 +123,7 @@ export default function App() {
   return (
     <div className="min-h-screen bg-transparent px-4 py-6 text-ink lg:px-8">
       <div className="mx-auto flex max-w-[1640px] flex-col gap-6">
-        <header className="grid gap-5 lg:grid-cols-[1.45fr_0.55fr]">
+        <header>
           <Card className="overflow-hidden">
             <div className="flex flex-col gap-6 p-7">
               <div className="flex items-start justify-between gap-4">
@@ -137,30 +142,6 @@ export default function App() {
               </div>
 
               <StepsBar current={store.step} />
-            </div>
-          </Card>
-
-          <Card className="border-shell bg-shell text-white">
-            <div className="grid h-full gap-4 p-6">
-              <div className="flex items-center gap-3 rounded-[20px] border border-white/10 bg-white/5 px-4 py-4">
-                <div className="rounded-full bg-accent p-3 text-[#233117]">
-                  <Gauge size={18} />
-                </div>
-                <div>
-                  <p className="text-xs uppercase tracking-[0.18em] text-white/55">Resumen rápido</p>
-                  <p className="mt-1 text-lg font-semibold">Estado actual del proyecto</p>
-                </div>
-              </div>
-              <Metric label="Piezas activas" value={enabledPieces.length} tone="accent" />
-              <Metric
-                label="Advertencias"
-                value={invalidPieces.length}
-                tone={invalidPieces.length ? "warning" : "default"}
-              />
-              <Metric
-                label="Área material"
-                value={formatArea(store.material.width * store.material.height, store.material.unit)}
-              />
             </div>
           </Card>
         </header>
@@ -184,8 +165,8 @@ export default function App() {
                       </div>
                       <h2 className="mt-4 text-2xl font-semibold">Paso 1. Cargar archivos</h2>
                       <p className="mt-2 max-w-xl text-sm leading-6 text-ink/68">
-                        Arrastra tus archivos aquí o usa el selector. Puedes trabajar con `SVG`,
-                        `DXF` y también `DWG`.
+                        Arrastra tus archivos aqui o usa el selector. Puedes trabajar con `SVG`,
+                        `DXF` y tambien `DWG`.
                       </p>
                     </div>
 
@@ -213,7 +194,7 @@ export default function App() {
                 <div className="rounded-[28px] border border-line bg-[#fcfdfb] p-5">
                   <h3 className="flex items-center gap-2 text-lg font-semibold">
                     <AlertCircle size={18} />
-                    Notas de importación
+                    Notas de importacion
                   </h3>
                   <div className="mt-4 space-y-3">
                     <p className="rounded-[18px] border border-line/70 bg-white px-3 py-3 text-sm text-ink/72">
@@ -247,7 +228,7 @@ export default function App() {
                     Paso 2. Elegir piezas y cantidades
                   </h2>
                   <p className="mt-2 text-sm text-ink/65">
-                    Revisa las piezas cargadas, ajusta cantidades y deja lista la selección antes de
+                    Revisa las piezas cargadas, ajusta cantidades y deja lista la seleccion antes de
                     pasar al material.
                   </p>
                 </div>
@@ -256,7 +237,7 @@ export default function App() {
               <div className="sticky top-4 z-10 mt-5 rounded-[22px] border border-line bg-white/95 p-4 shadow-panel backdrop-blur">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div className="text-sm text-ink/65">
-                    Ajusta aquí tus piezas y luego continúa al siguiente paso.
+                    Ajusta aqui tus piezas y luego continua al siguiente paso.
                   </div>
                   <div className="flex flex-wrap gap-3">
                     <Button variant="secondary" onClick={() => goToStep("carga")}>
@@ -285,11 +266,17 @@ export default function App() {
 
                   {store.pieces.length ? (
                     store.pieces.map((piece, index) => (
-                      <PieceRow key={piece.id} piece={piece} isLast={index === store.pieces.length - 1} />
+                      <PieceRow
+                        key={piece.id}
+                        piece={piece}
+                        maxPreviewWidth={previewReference.width}
+                        maxPreviewHeight={previewReference.height}
+                        isLast={index === store.pieces.length - 1}
+                      />
                     ))
                   ) : (
                     <div className="px-5 py-10 text-center text-sm text-ink/55">
-                      Aún no hay piezas cargadas.
+                      Aun no hay piezas cargadas.
                     </div>
                   )}
                 </div>
@@ -301,7 +288,7 @@ export default function App() {
             <Card className="p-6">
               <div className="flex items-center gap-2">
                 <Ruler size={20} />
-                <h2 className="text-2xl font-semibold">Paso 3. Material y configuración</h2>
+                <h2 className="text-2xl font-semibold">Paso 3. Material y configuracion</h2>
               </div>
 
               <div className="mt-5 grid gap-4 md:grid-cols-2">
@@ -424,9 +411,9 @@ export default function App() {
                       })
                     }
                   >
-                    <option value="none">Sin rotación</option>
-                    <option value="orthogonal">Cada 90°</option>
-                    <option value="free45">Cada 45°</option>
+                    <option value="none">Sin rotacion</option>
+                    <option value="orthogonal">Cada 90 grados</option>
+                    <option value="free45">Cada 45 grados</option>
                     <option value="free">Rotaciones libres aproximadas</option>
                   </select>
                 </Label>
@@ -438,12 +425,12 @@ export default function App() {
                       store.setNesting({ ...store.nesting, quality: event.target.value as typeof store.nesting.quality })
                     }
                   >
-                    <option value="fast">Rápido</option>
+                    <option value="fast">Rapido</option>
                     <option value="balanced">Equilibrado</option>
                     <option value="quality">Calidad</option>
                   </select>
                 </Label>
-                <Label title="Tiempo máximo">
+                <Label title="Tiempo maximo">
                   <select
                     className={inputClass}
                     value={store.nesting.maxTimeMs}
@@ -518,16 +505,21 @@ export default function App() {
                 <div className="flex flex-wrap gap-3">
                   <Button
                     variant="secondary"
+                    onClick={() => store.result && downloadDxf(store.pieces, store.material, store.result)}
+                    disabled={!store.result}
+                  >
+                    <Download size={16} className="mr-2" />
+                    Descargar DXF
+                  </Button>
+                  <Button
+                    variant="secondary"
                     onClick={() => store.result && downloadSvg(store.pieces, store.material, store.result)}
                     disabled={!store.result}
                   >
                     <Download size={16} className="mr-2" />
                     Descargar SVG
                   </Button>
-                  <Button
-                    onClick={() => store.result && void downloadPdf(store.pieces, store.material, store.result)}
-                    disabled={!store.result}
-                  >
+                  <Button onClick={() => store.result && void downloadPdf(store.pieces, store.material, store.result)} disabled={!store.result}>
                     <Download size={16} className="mr-2" />
                     Descargar PDF
                   </Button>
@@ -541,12 +533,27 @@ export default function App() {
   );
 }
 
-function PieceRow({ piece, isLast }: { piece: PieceItem; isLast: boolean }) {
+function PieceRow({
+  piece,
+  maxPreviewWidth,
+  maxPreviewHeight,
+  isLast
+}: {
+  piece: PieceItem;
+  maxPreviewWidth: number;
+  maxPreviewHeight: number;
+  isLast: boolean;
+}) {
   const updatePiece = useProjectStore((state) => state.updatePiece);
   const removePiece = useProjectStore((state) => state.removePiece);
   const material = useProjectStore((state) => state.material);
   const tooLarge = piece.geometry.width > material.width || piece.geometry.height > material.height;
   const markup = normalizeSvgMarkup(piece.geometry.svgMarkup, piece.geometry.sourceBounds);
+  const previewPadding = 18;
+  const previewBoxWidth = maxPreviewWidth + previewPadding * 2;
+  const previewBoxHeight = maxPreviewHeight + previewPadding * 2;
+  const previewOffsetX = previewPadding + (maxPreviewWidth - piece.geometry.width) / 2;
+  const previewOffsetY = previewPadding + (maxPreviewHeight - piece.geometry.height) / 2;
 
   return (
     <div
@@ -563,18 +570,18 @@ function PieceRow({ piece, isLast }: { piece: PieceItem; isLast: boolean }) {
         />
       </div>
 
-      <div className="grid grid-cols-[200px_1fr] items-start gap-5">
-        <div className="flex h-[160px] items-center justify-center overflow-hidden rounded-[24px] border border-line bg-[#f3f7ef] p-4">
-          <svg viewBox={`0 0 ${piece.geometry.width + 18} ${piece.geometry.height + 18}`} className="h-full w-full">
+      <div className="grid grid-cols-[220px_1fr] items-start gap-5">
+        <div className="flex h-[180px] items-center justify-center overflow-hidden rounded-[24px] border border-line bg-[#f3f7ef] p-4">
+          <svg viewBox={`0 0 ${previewBoxWidth} ${previewBoxHeight}`} className="h-full w-full">
             <g
-              transform="translate(9 9)"
-              className="[&_circle]:fill-transparent [&_ellipse]:fill-transparent [&_path]:fill-transparent [&_polygon]:fill-transparent [&_polyline]:fill-transparent [&_rect]:fill-transparent [&_*]:stroke-[#9eb4c8] [&_*]:stroke-[1.4]"
+              transform={`translate(${previewOffsetX} ${previewOffsetY})`}
+              className="[&_circle]:fill-transparent [&_ellipse]:fill-transparent [&_path]:fill-transparent [&_polygon]:fill-transparent [&_polyline]:fill-transparent [&_rect]:fill-transparent [&_*]:stroke-[#9eb4c8] [&_*]:[vector-effect:non-scaling-stroke]"
               dangerouslySetInnerHTML={{ __html: markup }}
             />
           </svg>
         </div>
 
-        <div className="flex min-h-[160px] flex-col justify-between gap-4">
+        <div className="flex min-h-[180px] flex-col justify-between gap-4">
           <div>
             <input
               className="rounded-xl border border-transparent bg-transparent px-2 py-1 text-[18px] font-semibold outline-none transition focus:border-line focus:bg-canvas"
@@ -597,12 +604,12 @@ function PieceRow({ piece, isLast }: { piece: PieceItem; isLast: boolean }) {
             ))}
             {tooLarge ? (
               <span className="rounded-full bg-rose-50 px-3 py-1 text-xs font-medium text-danger">
-                Supera el tamaño del material
+                Supera el tamano del material
               </span>
             ) : null}
             {!piece.warnings.length && !tooLarge ? (
               <span className="rounded-full bg-emerald-50 px-3 py-1 text-xs font-medium text-accentDeep">
-                Válida
+                Valida
               </span>
             ) : null}
             <Button variant="ghost" className="px-3 py-2 text-danger" onClick={() => removePiece(piece.id)}>
@@ -680,7 +687,7 @@ function warningLabel(warning: PieceItem["warnings"][number]) {
     case "open-path":
       return "Contorno abierto";
     case "invalid-shape":
-      return "Geometría inválida";
+      return "Geometria invalida";
     case "partial-support":
       return "Compatibilidad parcial";
     case "too-large":

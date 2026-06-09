@@ -6,11 +6,11 @@ const defaultState: ProjectState = {
   step: "carga",
   pieces: [],
   material: {
-    width: 1220,
-    height: 2440,
+    width: 900,
+    height: 600,
     unit: "mm",
     sheetCount: 1,
-    name: "Triplay estándar"
+    name: "Triplay estandar"
   },
   nesting: {
     pieceGap: 5,
@@ -92,8 +92,15 @@ function normalizePersisted(state: ProjectState | null) {
   }
 
   const validSteps: AppStep[] = ["carga", "piezas", "material", "resultado"];
+  const shouldUseFreshMaterial =
+    state.step === "carga" &&
+    state.pieces.length === 0 &&
+    state.material.width === 1220 &&
+    state.material.height === 2440;
+
   return {
     ...state,
-    step: validSteps.includes(state.step) ? state.step : "carga"
+    step: validSteps.includes(state.step) ? state.step : "carga",
+    material: shouldUseFreshMaterial ? defaultState.material : state.material
   };
 }
