@@ -1,6 +1,6 @@
 import type { ProjectState } from "../types";
 
-const STORAGE_KEY = "nesting-local-project-v1";
+const STORAGE_KEY = "nesting-local-project-v2";
 
 export function saveProject(state: ProjectState) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
