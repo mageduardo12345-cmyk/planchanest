@@ -498,10 +498,16 @@ export default function App() {
               ) : null}
 
               <div className="mt-6 flex flex-wrap justify-between gap-3">
-                <Button variant="secondary" onClick={() => goToStep("material")}>
-                  <ArrowLeft size={16} className="mr-2" />
-                  Volver a material
-                </Button>
+                <div className="flex flex-wrap gap-3">
+                  <Button variant="secondary" onClick={() => goToStep("material")}>
+                    <ArrowLeft size={16} className="mr-2" />
+                    Volver a material
+                  </Button>
+                  <Button variant="secondary" onClick={() => store.reset()}>
+                    <RefreshCcw size={16} className="mr-2" />
+                    Volver a empezar
+                  </Button>
+                </div>
                 <div className="flex flex-wrap gap-3">
                   <Button
                     variant="secondary"
