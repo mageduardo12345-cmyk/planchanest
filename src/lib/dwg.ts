@@ -2,9 +2,18 @@ import { Dwg_File_Type, LibreDwg } from "@mlightcad/libredwg-web";
 
 let libreDwgPromise: Promise<LibreDwg> | null = null;
 
+function getWasmPath() {
+  if (typeof window === "undefined") {
+    return "./node_modules/@mlightcad/libredwg-web/wasm";
+  }
+
+  const base = (import.meta as ImportMeta & { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/";
+  return `${base.replace(/\/?$/, "/")}libredwg-wasm`;
+}
+
 async function getLibreDwg() {
   if (!libreDwgPromise) {
-    libreDwgPromise = LibreDwg.create("/libredwg-wasm");
+    libreDwgPromise = LibreDwg.create(getWasmPath());
   }
 
   return libreDwgPromise;
