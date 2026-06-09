@@ -31,8 +31,6 @@ const presets = [
   { label: "900 x 1200 mm", width: 900, height: 1200 }
 ];
 
-const stageOrder: AppStep[] = ["carga", "piezas", "material", "resultado"];
-
 const inputClass =
   "rounded-2xl border border-line bg-white px-4 py-3 text-ink outline-none transition focus:border-accent/50 focus:ring-2 focus:ring-accent/15";
 
@@ -97,7 +95,6 @@ export default function App() {
 
   const enabledPieces = store.pieces.filter((piece) => piece.enabled);
   const invalidPieces = store.pieces.filter((piece) => piece.warnings.length > 0);
-  const currentIndex = stageOrder.indexOf(store.step);
   const canContinueFromPieces = enabledPieces.length > 0;
   const canContinueFromMaterial = canContinueFromPieces && store.material.width > 0 && store.material.height > 0;
   const resultMetrics = store.result
@@ -115,7 +112,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-transparent px-4 py-6 text-ink lg:px-8">
-      <div className="mx-auto flex max-w-[1480px] flex-col gap-6">
+      <div className="mx-auto flex max-w-[1640px] flex-col gap-6">
         <header className="grid gap-5 lg:grid-cols-[1.45fr_0.55fr]">
           <Card className="overflow-hidden">
             <div className="flex flex-col gap-6 p-7">
@@ -159,387 +156,369 @@ export default function App() {
           </Card>
         </header>
 
-        <main className="grid gap-6 xl:grid-cols-[1.02fr_0.98fr]">
-          <div className="flex flex-col gap-6">
-            {store.step === "carga" ? (
-              <Card className="p-6">
-                <div className="grid gap-4 md:grid-cols-[1.25fr_0.75fr]">
-                  <div
-                    className="rounded-[28px] border border-dashed border-accent/35 bg-gradient-to-br from-white to-[#f4f8ef] p-6"
-                    onDragOver={(event) => event.preventDefault()}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      void handleFiles(event.dataTransfer.files);
-                    }}
-                  >
-                    <div className="flex h-full flex-col justify-between gap-6">
-                      <div>
-                        <div className="inline-flex rounded-[20px] border border-accent/30 bg-accent/10 p-3 text-accentDeep">
-                          <FileUp size={26} />
-                        </div>
+        <main className="flex flex-col gap-6">
+          {store.step === "carga" ? (
+            <Card className="p-6">
+              <div className="grid gap-4 md:grid-cols-[1.25fr_0.75fr]">
+                <div
+                  className="rounded-[28px] border border-dashed border-accent/35 bg-gradient-to-br from-white to-[#f4f8ef] p-6"
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    void handleFiles(event.dataTransfer.files);
+                  }}
+                >
+                  <div className="flex h-full flex-col justify-between gap-6">
+                    <div>
+                      <div className="inline-flex rounded-[20px] border border-accent/30 bg-accent/10 p-3 text-accentDeep">
+                        <FileUp size={26} />
+                      </div>
                       <h2 className="mt-4 text-2xl font-semibold">Paso 1. Cargar archivos</h2>
                       <p className="mt-2 max-w-xl text-sm leading-6 text-ink/68">
                         Arrastra tus archivos aquí o usa el selector. Puedes trabajar con `SVG`,
                         `DXF` y ahora también `DWG`.
                       </p>
-                      </div>
-
-                      <div className="flex flex-wrap gap-3">
-                        <input
-                          ref={inputRef}
-                          type="file"
-                          hidden
-                          multiple
-                          accept=".svg,.dxf,.dwg"
-                          onChange={(event) => void handleFiles(event.target.files)}
-                        />
-                        <Button onClick={() => inputRef.current?.click()}>Subir archivos</Button>
-                        <Button variant="secondary" onClick={() => void loadDemo()}>
-                          Cargar demo
-                        </Button>
-                      </div>
-
-                      <p className="text-xs uppercase tracking-[0.18em] text-ink/45">
-                        Formatos admitidos: SVG, DXF, DWG
-                      </p>
                     </div>
-                  </div>
 
-                  <div className="rounded-[28px] border border-line bg-[#fcfdfb] p-5">
-                    <h3 className="flex items-center gap-2 text-lg font-semibold">
-                      <AlertCircle size={18} />
-                      Notas de importación
-                    </h3>
-                    <div className="mt-4 space-y-3">
-                      <p className="rounded-[18px] border border-line/70 bg-white px-3 py-3 text-sm text-ink/72">
-                        `DWG` ya se intenta abrir directo dentro de la app usando un lector local en
-                        navegador.
-                      </p>
-                      <p className="rounded-[18px] border border-line/70 bg-white px-3 py-3 text-sm text-ink/72">
-                        Si un `DWG` trae objetos o versiones no compatibles, la mejor salida sigue
-                        siendo guardarlo como `DXF` y volverlo a subir.
-                      </p>
-                      {store.messages.map((message, index) => (
-                        <p key={`${message}-${index}`} className="rounded-[18px] border border-line/70 bg-white px-3 py-2 text-sm text-ink/72">
-                          {message}
-                        </p>
-                      ))}
+                    <div className="flex flex-wrap gap-3">
+                      <input
+                        ref={inputRef}
+                        type="file"
+                        hidden
+                        multiple
+                        accept=".svg,.dxf,.dwg"
+                        onChange={(event) => void handleFiles(event.target.files)}
+                      />
+                      <Button onClick={() => inputRef.current?.click()}>Subir archivos</Button>
+                      <Button variant="secondary" onClick={() => void loadDemo()}>
+                        Cargar demo
+                      </Button>
                     </div>
-                  </div>
-                </div>
-              </Card>
-            ) : null}
 
-            {store.step === "piezas" ? (
-              <Card className="p-6">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h2 className="flex items-center gap-2 text-2xl font-semibold">
-                      <Boxes size={22} />
-                      Paso 2. Elegir piezas y cantidades
-                    </h2>
-                    <p className="mt-2 text-sm text-ink/65">
-                      Activa lo que quieres cortar, ajusta cantidades y elimina lo que no entre al
-                      nesting.
+                    <p className="text-xs uppercase tracking-[0.18em] text-ink/45">
+                      Formatos admitidos: SVG, DXF, DWG
                     </p>
                   </div>
                 </div>
 
-                <div className="sticky top-4 z-10 mt-5 rounded-[22px] border border-line bg-white/95 p-4 shadow-panel backdrop-blur">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="text-sm text-ink/65">
-                      Ajusta aquí tus piezas y luego continúa sin bajar hasta el fondo.
-                    </div>
-                    <div className="flex flex-wrap gap-3">
-                      <Button variant="secondary" onClick={() => goToStep("carga")}>
-                        <ArrowLeft size={16} className="mr-2" />
-                        Volver a carga
-                      </Button>
-                      <Button onClick={() => goToStep("material")} disabled={!canContinueFromPieces}>
-                        Continuar a material
-                        <ArrowRight size={16} className="ml-2" />
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-5 grid gap-4">
-                  {store.pieces.length ? (
-                    store.pieces.map((piece) => <PieceCard key={piece.id} piece={piece} />)
-                  ) : (
-                    <div className="rounded-[24px] border border-dashed border-line px-5 py-10 text-center text-sm text-ink/55">
-                      Aún no hay piezas cargadas.
-                    </div>
-                  )}
-                </div>
-              </Card>
-            ) : null}
-
-            {store.step === "material" ? (
-              <Card className="p-6">
-                <div className="flex items-center gap-2">
-                  <Ruler size={20} />
-                  <h2 className="text-2xl font-semibold">Paso 3. Material y configuración</h2>
-                </div>
-
-                <div className="mt-5 grid gap-4 md:grid-cols-2">
-                  <Label title="Nombre del material">
-                    <input
-                      className={inputClass}
-                      value={store.material.name}
-                      onChange={(event) => store.setMaterial({ ...store.material, name: event.target.value })}
-                    />
-                  </Label>
-                  <Label title="Cantidad de placas">
-                    <input
-                      className={inputClass}
-                      type="number"
-                      min={1}
-                      value={store.material.sheetCount}
-                      onChange={(event) =>
-                        store.setMaterial({ ...store.material, sheetCount: Math.max(Number(event.target.value) || 1, 1) })
-                      }
-                    />
-                  </Label>
-                  <Label title="Ancho">
-                    <input
-                      className={inputClass}
-                      inputMode="decimal"
-                      type="number"
-                      value={store.material.width}
-                      onChange={(event) =>
-                        store.setMaterial({ ...store.material, width: Number(event.target.value) || 0 })
-                      }
-                    />
-                  </Label>
-                  <Label title="Alto">
-                    <input
-                      className={inputClass}
-                      inputMode="decimal"
-                      type="number"
-                      value={store.material.height}
-                      onChange={(event) =>
-                        store.setMaterial({ ...store.material, height: Number(event.target.value) || 0 })
-                      }
-                    />
-                  </Label>
-                  <Label title="Unidad">
-                    <select
-                      className={inputClass}
-                      value={store.material.unit}
-                      onChange={(event) =>
-                        store.setMaterial({ ...store.material, unit: event.target.value as typeof store.material.unit })
-                      }
-                    >
-                      <option value="mm">mm</option>
-                      <option value="cm">cm</option>
-                      <option value="in">pulgadas</option>
-                    </select>
-                  </Label>
-                </div>
-
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {presets.map((preset) => (
-                    <Button
-                      key={preset.label}
-                      variant="secondary"
-                      className="px-3 py-2 text-xs"
-                      onClick={() => store.setMaterial({ ...store.material, width: preset.width, height: preset.height })}
-                    >
-                      {preset.label}
-                    </Button>
-                  ))}
-                </div>
-
-                <div className="mt-6 grid gap-4 md:grid-cols-2">
-                  <Label title="Margen entre piezas">
-                    <input
-                      className={inputClass}
-                      inputMode="decimal"
-                      type="number"
-                      value={store.nesting.pieceGap}
-                      onChange={(event) =>
-                        store.setNesting({ ...store.nesting, pieceGap: Number(event.target.value) || 0 })
-                      }
-                    />
-                  </Label>
-                  <Label title="Margen al borde">
-                    <input
-                      className={inputClass}
-                      inputMode="decimal"
-                      type="number"
-                      value={store.nesting.edgeGap}
-                      onChange={(event) =>
-                        store.setNesting({ ...store.nesting, edgeGap: Number(event.target.value) || 0 })
-                      }
-                    />
-                  </Label>
-                  <Label title="Kerf">
-                    <input
-                      className={inputClass}
-                      inputMode="decimal"
-                      type="number"
-                      step="0.01"
-                      value={store.nesting.kerf}
-                      onChange={(event) =>
-                        store.setNesting({ ...store.nesting, kerf: Number(event.target.value) || 0 })
-                      }
-                    />
-                  </Label>
-                  <Label title="Rotaciones">
-                    <select
-                      className={inputClass}
-                      value={store.nesting.rotations}
-                      onChange={(event) =>
-                        store.setNesting({ ...store.nesting, rotations: event.target.value as typeof store.nesting.rotations })
-                      }
-                    >
-                      <option value="none">Sin rotación</option>
-                      <option value="orthogonal">Cada 90°</option>
-                      <option value="free45">Cada 45°</option>
-                      <option value="free">Rotaciones libres aproximadas</option>
-                    </select>
-                  </Label>
-                  <Label title="Calidad">
-                    <select
-                      className={inputClass}
-                      value={store.nesting.quality}
-                      onChange={(event) =>
-                        store.setNesting({ ...store.nesting, quality: event.target.value as typeof store.nesting.quality })
-                      }
-                    >
-                      <option value="fast">Rápido</option>
-                      <option value="balanced">Equilibrado</option>
-                      <option value="quality">Calidad</option>
-                    </select>
-                  </Label>
-                  <Label title="Tiempo máximo">
-                    <select
-                      className={inputClass}
-                      value={store.nesting.maxTimeMs}
-                      onChange={(event) =>
-                        store.setNesting({ ...store.nesting, maxTimeMs: Number(event.target.value) || 30000 })
-                      }
-                    >
-                      <option value={10000}>10 segundos</option>
-                      <option value={30000}>30 segundos</option>
-                      <option value={60000}>1 minuto</option>
-                      <option value={300000}>5 minutos</option>
-                    </select>
-                  </Label>
-                </div>
-
-                <div className="mt-6">
-                  <div className="h-3 overflow-hidden rounded-full bg-[#dfe8dd]">
-                    <div
-                      className="h-full rounded-full bg-accent transition-all"
-                      style={{ width: `${Math.round(progress * 100)}%` }}
-                    />
-                  </div>
-                  <div className="mt-3 flex items-center justify-between text-sm text-ink/60">
-                    <span>{status}</span>
-                    <span>{Math.round(progress * 100)}%</span>
-                  </div>
-                </div>
-
-                <div className="mt-6 flex flex-wrap justify-between gap-3">
-                  <Button variant="secondary" onClick={() => goToStep("piezas")}>
-                    <ArrowLeft size={16} className="mr-2" />
-                    Volver a piezas
-                  </Button>
-                  <div className="flex flex-wrap gap-3">
-                    <Button variant="secondary" onClick={() => store.reset()}>
-                      <RefreshCcw size={16} className="mr-2" />
-                      Reiniciar
-                    </Button>
-                    <Button onClick={() => void startNesting()} disabled={!canContinueFromMaterial || store.running}>
-                      <Play size={16} className="mr-2" />
-                      {store.running ? "Calculando..." : "Realizar anidado"}
-                    </Button>
-                  </div>
-                </div>
-              </Card>
-            ) : null}
-
-            {store.step === "resultado" ? (
-              <Card className="p-6">
-                <div className="flex items-center gap-2">
-                  <Settings2 size={20} />
-                  <h2 className="text-2xl font-semibold">Paso 4. Resultado y descarga</h2>
-                </div>
-
-                <div className="mt-5">
-                  <PreviewCanvas pieces={store.pieces} material={store.material} result={store.result} />
-                </div>
-
-                {resultMetrics ? (
-                  <div className="mt-5 grid gap-3 md:grid-cols-2">
-                    {resultMetrics.map((metric) => (
-                      <Metric key={metric.label} label={metric.label} value={metric.value} tone={metric.tone} />
+                <div className="rounded-[28px] border border-line bg-[#fcfdfb] p-5">
+                  <h3 className="flex items-center gap-2 text-lg font-semibold">
+                    <AlertCircle size={18} />
+                    Notas de importación
+                  </h3>
+                  <div className="mt-4 space-y-3">
+                    <p className="rounded-[18px] border border-line/70 bg-white px-3 py-3 text-sm text-ink/72">
+                      `DWG` ya se intenta abrir directo dentro de la app usando un lector local en
+                      navegador.
+                    </p>
+                    <p className="rounded-[18px] border border-line/70 bg-white px-3 py-3 text-sm text-ink/72">
+                      Si un `DWG` trae objetos o versiones no compatibles, la mejor salida sigue
+                      siendo guardarlo como `DXF` y volverlo a subir.
+                    </p>
+                    {store.messages.map((message, index) => (
+                      <p key={`${message}-${index}`} className="rounded-[18px] border border-line/70 bg-white px-3 py-2 text-sm text-ink/72">
+                        {message}
+                      </p>
                     ))}
                   </div>
-                ) : null}
+                </div>
+              </div>
+            </Card>
+          ) : null}
 
-                <div className="mt-6 flex flex-wrap justify-between gap-3">
-                  <Button variant="secondary" onClick={() => goToStep("material")}>
-                    <ArrowLeft size={16} className="mr-2" />
-                    Volver a material
-                  </Button>
+          {store.step === "piezas" ? (
+            <Card className="p-6">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h2 className="flex items-center gap-2 text-2xl font-semibold">
+                    <Boxes size={22} />
+                    Paso 2. Elegir piezas y cantidades
+                  </h2>
+                  <p className="mt-2 text-sm text-ink/65">
+                    Previsualiza las piezas, activa lo que quieres cortar y ajusta cantidades sin perder de
+                    vista el conjunto.
+                  </p>
+                </div>
+              </div>
+
+              <div className="sticky top-4 z-10 mt-5 rounded-[22px] border border-line bg-white/95 p-4 shadow-panel backdrop-blur">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="text-sm text-ink/65">
+                    Ajusta aquí tus piezas y luego continúa sin bajar hasta el fondo.
+                  </div>
                   <div className="flex flex-wrap gap-3">
-                    <Button
-                      variant="secondary"
-                      onClick={() => store.result && downloadSvg(store.pieces, store.material, store.result)}
-                      disabled={!store.result}
-                    >
-                      <Download size={16} className="mr-2" />
-                      Descargar SVG
+                    <Button variant="secondary" onClick={() => goToStep("carga")}>
+                      <ArrowLeft size={16} className="mr-2" />
+                      Volver a carga
                     </Button>
-                    <Button
-                      onClick={() => store.result && void downloadPdf(store.pieces, store.material, store.result)}
-                      disabled={!store.result}
-                    >
-                      <Download size={16} className="mr-2" />
-                      Descargar PDF
+                    <Button onClick={() => goToStep("material")} disabled={!canContinueFromPieces}>
+                      Continuar a material
+                      <ArrowRight size={16} className="ml-2" />
                     </Button>
                   </div>
                 </div>
-              </Card>
-            ) : null}
-          </div>
-
-          <div className="flex flex-col gap-6">
-            <Card className="p-6">
-              <div className="flex items-center gap-2">
-                <AlertCircle size={18} />
-                <h2 className="text-xl font-semibold">Ayuda rápida</h2>
               </div>
-              <div className="mt-4 space-y-3 text-sm text-ink/72">
-                <p className="rounded-[18px] border border-line/70 bg-white px-4 py-3">
-                  `DWG` ya se procesa dentro del navegador, pero algunos archivos complejos pueden dar
-                  mejor resultado si se convierten a `DXF`.
-                </p>
-                <p className="rounded-[18px] border border-line/70 bg-white px-4 py-3">
-                  El PDF ahora sale solo con el resultado visual del acomodo, sin encabezados ni texto extra.
-                </p>
-                <p className="rounded-[18px] border border-line/70 bg-white px-4 py-3">
-                  Si quieres volver a empezar, usa <strong>Reiniciar</strong> en el paso de material.
-                </p>
+
+              <div className="mt-5 rounded-[28px] border border-line bg-[#f8fbf5] p-5">
+                <div className="flex items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-xl font-semibold">Previsualización de piezas</h3>
+                    <p className="mt-1 text-sm text-ink/62">
+                      Vista general de las piezas activas para revisar proporciones antes del anidado.
+                    </p>
+                  </div>
+                  <div className="rounded-full border border-line bg-white px-4 py-2 text-sm text-ink/70">
+                    {enabledPieces.length} activas
+                  </div>
+                </div>
+
+                <div className="mt-4">
+                  <PiecesOverview pieces={enabledPieces} />
+                </div>
+              </div>
+
+              <div className="mt-5 grid gap-4 lg:grid-cols-2">
+                {store.pieces.length ? (
+                  store.pieces.map((piece) => <PieceCard key={piece.id} piece={piece} />)
+                ) : (
+                  <div className="col-span-full rounded-[24px] border border-dashed border-line px-5 py-10 text-center text-sm text-ink/55">
+                    Aún no hay piezas cargadas.
+                  </div>
+                )}
               </div>
             </Card>
+          ) : null}
 
+          {store.step === "material" ? (
             <Card className="p-6">
               <div className="flex items-center gap-2">
-                <Ruler size={18} />
-                <h2 className="text-xl font-semibold">Resumen del trabajo</h2>
+                <Ruler size={20} />
+                <h2 className="text-2xl font-semibold">Paso 3. Material y configuración</h2>
               </div>
-              <div className="mt-4 grid gap-3">
-                <Metric label="Piezas cargadas" value={store.pieces.length} />
-                <Metric label="Piezas activas" value={enabledPieces.length} tone="accent" />
-                <Metric label="Material" value={`${store.material.width} x ${store.material.height} ${store.material.unit}`} />
-                <Metric label="Nombre material" value={store.material.name || "Sin nombre"} />
+
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                <Label title="Nombre del material">
+                  <input
+                    className={inputClass}
+                    value={store.material.name}
+                    onChange={(event) => store.setMaterial({ ...store.material, name: event.target.value })}
+                  />
+                </Label>
+                <Label title="Cantidad de placas">
+                  <input
+                    className={inputClass}
+                    type="number"
+                    min={1}
+                    value={store.material.sheetCount}
+                    onChange={(event) =>
+                      store.setMaterial({ ...store.material, sheetCount: Math.max(Number(event.target.value) || 1, 1) })
+                    }
+                  />
+                </Label>
+                <Label title="Ancho">
+                  <input
+                    className={inputClass}
+                    inputMode="decimal"
+                    type="number"
+                    value={store.material.width}
+                    onChange={(event) =>
+                      store.setMaterial({ ...store.material, width: Number(event.target.value) || 0 })
+                    }
+                  />
+                </Label>
+                <Label title="Alto">
+                  <input
+                    className={inputClass}
+                    inputMode="decimal"
+                    type="number"
+                    value={store.material.height}
+                    onChange={(event) =>
+                      store.setMaterial({ ...store.material, height: Number(event.target.value) || 0 })
+                    }
+                  />
+                </Label>
+                <Label title="Unidad">
+                  <select
+                    className={inputClass}
+                    value={store.material.unit}
+                    onChange={(event) =>
+                      store.setMaterial({ ...store.material, unit: event.target.value as typeof store.material.unit })
+                    }
+                  >
+                    <option value="mm">mm</option>
+                    <option value="cm">cm</option>
+                    <option value="in">pulgadas</option>
+                  </select>
+                </Label>
+              </div>
+
+              <div className="mt-4 flex flex-wrap gap-2">
+                {presets.map((preset) => (
+                  <Button
+                    key={preset.label}
+                    variant="secondary"
+                    className="px-3 py-2 text-xs"
+                    onClick={() => store.setMaterial({ ...store.material, width: preset.width, height: preset.height })}
+                  >
+                    {preset.label}
+                  </Button>
+                ))}
+              </div>
+
+              <div className="mt-6 grid gap-4 md:grid-cols-2">
+                <Label title="Margen entre piezas">
+                  <input
+                    className={inputClass}
+                    inputMode="decimal"
+                    type="number"
+                    value={store.nesting.pieceGap}
+                    onChange={(event) =>
+                      store.setNesting({ ...store.nesting, pieceGap: Number(event.target.value) || 0 })
+                    }
+                  />
+                </Label>
+                <Label title="Margen al borde">
+                  <input
+                    className={inputClass}
+                    inputMode="decimal"
+                    type="number"
+                    value={store.nesting.edgeGap}
+                    onChange={(event) =>
+                      store.setNesting({ ...store.nesting, edgeGap: Number(event.target.value) || 0 })
+                    }
+                  />
+                </Label>
+                <Label title="Kerf">
+                  <input
+                    className={inputClass}
+                    inputMode="decimal"
+                    type="number"
+                    step="0.01"
+                    value={store.nesting.kerf}
+                    onChange={(event) =>
+                      store.setNesting({ ...store.nesting, kerf: Number(event.target.value) || 0 })
+                    }
+                  />
+                </Label>
+                <Label title="Rotaciones">
+                  <select
+                    className={inputClass}
+                    value={store.nesting.rotations}
+                    onChange={(event) =>
+                      store.setNesting({ ...store.nesting, rotations: event.target.value as typeof store.nesting.rotations })
+                    }
+                  >
+                    <option value="none">Sin rotación</option>
+                    <option value="orthogonal">Cada 90°</option>
+                    <option value="free45">Cada 45°</option>
+                    <option value="free">Rotaciones libres aproximadas</option>
+                  </select>
+                </Label>
+                <Label title="Calidad">
+                  <select
+                    className={inputClass}
+                    value={store.nesting.quality}
+                    onChange={(event) =>
+                      store.setNesting({ ...store.nesting, quality: event.target.value as typeof store.nesting.quality })
+                    }
+                  >
+                    <option value="fast">Rápido</option>
+                    <option value="balanced">Equilibrado</option>
+                    <option value="quality">Calidad</option>
+                  </select>
+                </Label>
+                <Label title="Tiempo máximo">
+                  <select
+                    className={inputClass}
+                    value={store.nesting.maxTimeMs}
+                    onChange={(event) =>
+                      store.setNesting({ ...store.nesting, maxTimeMs: Number(event.target.value) || 30000 })
+                    }
+                  >
+                    <option value={10000}>10 segundos</option>
+                    <option value={30000}>30 segundos</option>
+                    <option value={60000}>1 minuto</option>
+                    <option value={300000}>5 minutos</option>
+                  </select>
+                </Label>
+              </div>
+
+              <div className="mt-6">
+                <div className="h-3 overflow-hidden rounded-full bg-[#dfe8dd]">
+                  <div
+                    className="h-full rounded-full bg-accent transition-all"
+                    style={{ width: `${Math.round(progress * 100)}%` }}
+                  />
+                </div>
+                <div className="mt-3 flex items-center justify-between text-sm text-ink/60">
+                  <span>{status}</span>
+                  <span>{Math.round(progress * 100)}%</span>
+                </div>
+              </div>
+
+              <div className="mt-6 flex flex-wrap justify-between gap-3">
+                <Button variant="secondary" onClick={() => goToStep("piezas")}>
+                  <ArrowLeft size={16} className="mr-2" />
+                  Volver a piezas
+                </Button>
+                <div className="flex flex-wrap gap-3">
+                  <Button variant="secondary" onClick={() => store.reset()}>
+                    <RefreshCcw size={16} className="mr-2" />
+                    Reiniciar
+                  </Button>
+                  <Button onClick={() => void startNesting()} disabled={!canContinueFromMaterial || store.running}>
+                    <Play size={16} className="mr-2" />
+                    {store.running ? "Calculando..." : "Realizar anidado"}
+                  </Button>
+                </div>
               </div>
             </Card>
-          </div>
+          ) : null}
+
+          {store.step === "resultado" ? (
+            <Card className="p-6">
+              <div className="flex items-center gap-2">
+                <Settings2 size={20} />
+                <h2 className="text-2xl font-semibold">Paso 4. Resultado y descarga</h2>
+              </div>
+
+              <div className="mt-5">
+                <PreviewCanvas pieces={store.pieces} material={store.material} result={store.result} />
+              </div>
+
+              {resultMetrics ? (
+                <div className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {resultMetrics.map((metric) => (
+                    <Metric key={metric.label} label={metric.label} value={metric.value} tone={metric.tone} />
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="mt-6 flex flex-wrap justify-between gap-3">
+                <Button variant="secondary" onClick={() => goToStep("material")}>
+                  <ArrowLeft size={16} className="mr-2" />
+                  Volver a material
+                </Button>
+                <div className="flex flex-wrap gap-3">
+                  <Button
+                    variant="secondary"
+                    onClick={() => store.result && downloadSvg(store.pieces, store.material, store.result)}
+                    disabled={!store.result}
+                  >
+                    <Download size={16} className="mr-2" />
+                    Descargar SVG
+                  </Button>
+                  <Button
+                    onClick={() => store.result && void downloadPdf(store.pieces, store.material, store.result)}
+                    disabled={!store.result}
+                  >
+                    <Download size={16} className="mr-2" />
+                    Descargar PDF
+                  </Button>
+                </div>
+              </div>
+            </Card>
+          ) : null}
         </main>
       </div>
     </div>
@@ -555,10 +534,10 @@ function PieceCard({ piece }: { piece: PieceItem }) {
   const tooLarge = piece.geometry.width > material.width || piece.geometry.height > material.height;
 
   return (
-    <div className="grid gap-4 rounded-[26px] border border-line bg-[#fcfdfb] p-4 md:grid-cols-[120px_1fr]">
-      <div className="flex h-[110px] items-center justify-center rounded-[20px] border border-line/70 bg-canvas p-3">
-        <svg viewBox={`0 0 ${piece.geometry.width + 12} ${piece.geometry.height + 12}`} className="h-full w-full">
-          <g transform="translate(6 6)" dangerouslySetInnerHTML={{ __html: piece.geometry.svgMarkup }} />
+    <div className="grid gap-4 rounded-[26px] border border-line bg-[#fcfdfb] p-4 md:grid-cols-[150px_1fr]">
+      <div className="flex h-[130px] items-center justify-center rounded-[22px] border border-line/70 bg-canvas p-3">
+        <svg viewBox={`0 0 ${piece.geometry.width + 16} ${piece.geometry.height + 16}`} className="h-full w-full">
+          <g transform="translate(8 8)" dangerouslySetInnerHTML={{ __html: piece.geometry.svgMarkup }} />
         </svg>
       </div>
 
@@ -598,7 +577,7 @@ function PieceCard({ piece }: { piece: PieceItem }) {
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 lg:grid-cols-4">
           <Label title="Cantidad">
             <input
               className={inputClass}
@@ -637,6 +616,75 @@ function PieceCard({ piece }: { piece: PieceItem }) {
           ) : null}
         </div>
       </div>
+    </div>
+  );
+}
+
+function PiecesOverview({ pieces }: { pieces: PieceItem[] }) {
+  if (!pieces.length) {
+    return (
+      <div className="rounded-[24px] border border-dashed border-line bg-white px-5 py-12 text-center text-sm text-ink/55">
+        Activa piezas para ver una previsualización general aquí.
+      </div>
+    );
+  }
+
+  const totalWidth = pieces.reduce((sum, piece) => sum + piece.geometry.width + 80, 40);
+  const tallest = Math.max(...pieces.map((piece) => piece.geometry.height), 120);
+  let cursorX = 30;
+
+  return (
+    <div className="scroll-soft overflow-auto rounded-[24px] border border-line bg-white p-4">
+      <svg
+        width={Math.max(totalWidth, 960)}
+        height={Math.max(tallest + 120, 280)}
+        viewBox={`0 0 ${Math.max(totalWidth, 960)} ${Math.max(tallest + 120, 280)}`}
+        className="min-h-[260px] min-w-full"
+      >
+        <rect width="100%" height="100%" rx="18" fill="#f8fbf5" />
+        {pieces.map((piece) => {
+          const cardX = cursorX;
+          const previewWidth = piece.geometry.width;
+          const previewHeight = piece.geometry.height;
+          const scale = Math.min(180 / Math.max(previewWidth, 1), 180 / Math.max(previewHeight, 1), 1.6);
+          const frameWidth = Math.max(previewWidth * scale + 36, 190);
+          const frameHeight = Math.max(previewHeight * scale + 70, 220);
+          const previewX = cardX + (frameWidth - previewWidth * scale) / 2;
+          const previewY = 52 + (140 - previewHeight * scale) / 2;
+
+          cursorX += frameWidth + 24;
+
+          return (
+            <g key={piece.id}>
+              <rect
+                x={cardX}
+                y={26}
+                width={frameWidth}
+                height={frameHeight}
+                rx={18}
+                fill="#ffffff"
+                stroke="#dfe4d8"
+              />
+              <text x={cardX + 16} y={52} fontSize="14" fill="#364138" fontWeight="600">
+                {piece.name}
+              </text>
+              <text x={cardX + 16} y={72} fontSize="11" fill="#6d776d">
+                x{piece.quantity} · {piece.sourceFile}
+              </text>
+              <rect
+                x={cardX + 14}
+                y={86}
+                width={frameWidth - 28}
+                height={frameHeight - 104}
+                rx={14}
+                fill="#f5f8f1"
+                stroke="#e3e8de"
+              />
+              <g transform={`translate(${previewX} ${previewY}) scale(${scale})`} dangerouslySetInnerHTML={{ __html: piece.geometry.svgMarkup }} />
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }
