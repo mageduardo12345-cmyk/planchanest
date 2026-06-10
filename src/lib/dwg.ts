@@ -1,6 +1,9 @@
-import { Dwg_File_Type, LibreDwg } from "@mlightcad/libredwg-web";
+import type { LibreDwg } from "@mlightcad/libredwg-web";
+
+type LibreDwgModule = typeof import("@mlightcad/libredwg-web");
 
 let libreDwgPromise: Promise<LibreDwg> | null = null;
+let libreDwgModulePromise: Promise<LibreDwgModule> | null = null;
 
 function getWasmPath() {
   if (typeof window === "undefined") {
@@ -12,16 +15,21 @@ function getWasmPath() {
 }
 
 async function getLibreDwg() {
+  if (!libreDwgModulePromise) {
+    libreDwgModulePromise = import("@mlightcad/libredwg-web");
+  }
+
   if (!libreDwgPromise) {
-    libreDwgPromise = LibreDwg.create(getWasmPath());
+    libreDwgPromise = libreDwgModulePromise.then((module) => module.LibreDwg.create(getWasmPath()));
   }
 
   return libreDwgPromise;
 }
 
 export async function convertDwgToSvg(fileContent: ArrayBuffer) {
+  const module = await (libreDwgModulePromise ?? import("@mlightcad/libredwg-web"));
   const libreDwg = await getLibreDwg();
-  const data = libreDwg.dwg_read_data(fileContent, Dwg_File_Type.DWG);
+  const data = libreDwg.dwg_read_data(fileContent, module.Dwg_File_Type.DWG);
 
   if (!data) {
     throw new Error("No fue posible abrir el DWG.");

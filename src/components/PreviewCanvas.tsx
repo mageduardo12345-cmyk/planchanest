@@ -55,17 +55,8 @@ export default function PreviewCanvas({
                   <g
                     key={`${placement.pieceId}-${placementIndex}`}
                     transform={`translate(${placement.x} ${placement.y}) rotate(${placement.rotation})`}
+                    className="[&_circle]:fill-[#d6f0cf] [&_ellipse]:fill-[#d6f0cf] [&_path]:fill-[#d6f0cf] [&_polygon]:fill-[#d6f0cf] [&_polyline]:fill-transparent [&_rect]:fill-[#d6f0cf] [&_*]:stroke-[#3e8f57] [&_*]:[vector-effect:non-scaling-stroke]"
                   >
-                    <rect
-                      x={0}
-                      y={0}
-                      width={piece.geometry.width}
-                      height={piece.geometry.height}
-                      rx={8}
-                      fill="rgba(126, 211, 33, 0.09)"
-                      stroke="rgba(93, 161, 18, 0.35)"
-                      strokeDasharray="8 6"
-                    />
                     <g dangerouslySetInnerHTML={{ __html: markup }} />
                   </g>
                 );

@@ -12,6 +12,55 @@ export type GeometryWarning =
   | "invalid-shape"
   | "partial-support";
 
+export interface GeometryPoint {
+  x: number;
+  y: number;
+}
+
+export type GeometryEntity =
+  | {
+      kind: "polyline";
+      points: GeometryPoint[];
+      closed: boolean;
+    }
+  | {
+      kind: "circle";
+      cx: number;
+      cy: number;
+      r: number;
+    }
+  | {
+      kind: "ellipse";
+      cx: number;
+      cy: number;
+      rx: number;
+      ry: number;
+      rotation: number;
+    }
+  | {
+      kind: "ellipseArc";
+      cx: number;
+      cy: number;
+      rx: number;
+      ry: number;
+      rotation: number;
+      startAngle: number;
+      endAngle: number;
+    }
+  | {
+      kind: "arc";
+      cx: number;
+      cy: number;
+      r: number;
+      startAngle: number;
+      endAngle: number;
+    }
+  | {
+      kind: "path";
+      d: string;
+      closed: boolean;
+    };
+
 export interface PieceGeometry {
   svgMarkup: string;
   width: number;
@@ -26,6 +75,7 @@ export interface PieceGeometry {
   closed: boolean;
   hasCurves: boolean;
   hasHoles: boolean;
+  entities: GeometryEntity[];
 }
 
 export interface PieceItem {

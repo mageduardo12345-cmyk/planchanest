@@ -16,9 +16,9 @@ import PreviewCanvas from "./components/PreviewCanvas";
 import StepsBar from "./components/StepsBar";
 import { Button, Card, Label, Metric } from "./components/ui";
 import { downloadDxf, downloadPdf, downloadSvg } from "./lib/exporters";
-import { normalizeSvgMarkup } from "./lib/geometry";
+import { getGeometrySignature, normalizeSvgMarkup } from "./lib/geometry";
 import { importFiles } from "./lib/importers";
-import { runNesting } from "./lib/nesting";
+import { runNestingInWorker, type NestingRunHandle } from "./lib/nesting-client";
 import { formatMeasure } from "./lib/units";
 import { useProjectStore } from "./state/useProjectStore";
 import type { AppStep, PieceItem } from "./types";
@@ -35,9 +35,20 @@ const inputClass =
 
 export default function App() {
   const inputRef = useRef<HTMLInputElement | null>(null);
+  const nestingRunRef = useRef<NestingRunHandle | null>(null);
   const [progress, setProgress] = useState(0);
   const [status, setStatus] = useState("Esperando archivos.");
+  const [busyAction, setBusyAction] = useState<
+    "idle" | "importing" | "exporting-dxf" | "exporting-svg" | "exporting-pdf"
+  >("idle");
   const store = useProjectStore();
+
+  useEffect(() => {
+    return () => {
+      nestingRunRef.current?.cancel();
+      nestingRunRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     if (store.result) {
@@ -60,42 +71,83 @@ export default function App() {
       return;
     }
 
-    const files = Array.from(fileList);
-    const { pieces, messages } = await importFiles(files);
-    store.setPieces(mergePiecesByShape(pieces));
-    store.setMessages(messages);
-    store.setResult(null);
-    store.setStep("piezas");
+    setBusyAction("importing");
+    setStatus("Importando archivos.");
+    try {
+      const files = Array.from(fileList);
+      const { pieces, messages } = await importFiles(files);
+      store.setPieces(mergePiecesByShape(pieces));
+      store.setMessages(messages);
+      store.setResult(null);
+      store.setStep("piezas");
+      setStatus("Archivos listos.");
+    } finally {
+      setBusyAction("idle");
+    }
   }
 
   async function loadDemo() {
-    const response = await fetch("/samples/demo.svg");
-    const blob = await response.blob();
-    const demo = new File([blob], "demo.svg", { type: "image/svg+xml" });
-    const { pieces, messages } = await importFiles([demo]);
-    store.setPieces(mergePiecesByShape(pieces));
-    store.setMessages(messages);
-    store.setResult(null);
-    store.setStep("piezas");
+    setBusyAction("importing");
+    setStatus("Cargando demo.");
+    try {
+      const response = await fetch("/samples/demo.svg");
+      const blob = await response.blob();
+      const demo = new File([blob], "demo.svg", { type: "image/svg+xml" });
+      const { pieces, messages } = await importFiles([demo]);
+      store.setPieces(mergePiecesByShape(pieces));
+      store.setMessages(messages);
+      store.setResult(null);
+      store.setStep("piezas");
+      setStatus("Demo lista.");
+    } finally {
+      setBusyAction("idle");
+    }
   }
 
   async function startNesting() {
+    nestingRunRef.current?.cancel();
     store.setRunning(true);
     setProgress(0);
     setStatus("Preparando anidado.");
-    const result = await runNesting(store.pieces, store.material, store.nesting, (message, value) => {
-      setStatus(message);
-      setProgress(value);
-    });
-    store.setResult(result);
+    try {
+      const runHandle = runNestingInWorker(store.pieces, store.material, store.nesting, (message, value) => {
+        setStatus(message);
+        setProgress(value);
+      });
+      nestingRunRef.current = runHandle;
+      const result = await runHandle.promise;
+      nestingRunRef.current = null;
+      store.setResult(result);
+      store.setStep("resultado");
+    } catch (error) {
+      nestingRunRef.current = null;
+      if (error instanceof Error && error.message === "Anidado cancelado.") {
+        setStatus("Anidado cancelado.");
+        return;
+      }
+      store.setMessages([
+        error instanceof Error ? error.message : "No fue posible completar el anidado."
+      ]);
+      setStatus("No fue posible completar el anidado.");
+    } finally {
+      store.setRunning(false);
+    }
+  }
+
+  function cancelNesting() {
+    nestingRunRef.current?.cancel();
+    nestingRunRef.current = null;
     store.setRunning(false);
-    store.setStep("resultado");
+    setProgress(0);
+    setStatus("Anidado cancelado.");
   }
 
   const enabledPieces = store.pieces.filter((piece) => piece.enabled);
   const canContinueFromPieces = enabledPieces.length > 0;
   const canContinueFromMaterial =
     canContinueFromPieces && store.material.width > 0 && store.material.height > 0;
+  const isImporting = busyAction === "importing";
+  const isExporting = busyAction.startsWith("exporting");
   const previewReference = store.pieces.reduce(
     (acc, piece) => ({
       width: Math.max(acc.width, piece.geometry.width),
@@ -117,7 +169,21 @@ export default function App() {
     : null;
 
   function goToStep(step: AppStep) {
+    if (store.running) {
+      cancelNesting();
+    }
     store.setStep(step);
+  }
+
+  function resetProject() {
+    if (store.running) {
+      cancelNesting();
+    }
+
+    store.reset();
+    setBusyAction("idle");
+    setProgress(0);
+    setStatus("Esperando archivos.");
   }
 
   return (
@@ -179,9 +245,11 @@ export default function App() {
                         accept=".svg,.dxf,.dwg"
                         onChange={(event) => void handleFiles(event.target.files)}
                       />
-                      <Button onClick={() => inputRef.current?.click()}>Subir archivos</Button>
-                      <Button variant="secondary" onClick={() => void loadDemo()}>
-                        Cargar demo
+                      <Button onClick={() => inputRef.current?.click()} disabled={isImporting}>
+                        {isImporting ? "Importando..." : "Subir archivos"}
+                      </Button>
+                      <Button variant="secondary" onClick={() => void loadDemo()} disabled={isImporting}>
+                        {isImporting ? "Preparando..." : "Cargar demo"}
                       </Button>
                     </div>
 
@@ -465,14 +533,24 @@ export default function App() {
                   Volver a piezas
                 </Button>
                 <div className="flex flex-wrap gap-3">
-                  <Button variant="secondary" onClick={() => store.reset()}>
+                  <Button variant="secondary" onClick={() => resetProject()}>
                     <RefreshCcw size={16} className="mr-2" />
                     Reiniciar
                   </Button>
-                  <Button onClick={() => void startNesting()} disabled={!canContinueFromMaterial || store.running}>
-                    <Play size={16} className="mr-2" />
-                    {store.running ? "Calculando..." : "Realizar anidado"}
-                  </Button>
+                  {store.running ? (
+                    <Button variant="secondary" onClick={() => cancelNesting()}>
+                      <RefreshCcw size={16} className="mr-2" />
+                      Cancelar calculo
+                    </Button>
+                  ) : (
+                    <Button
+                      onClick={() => void startNesting()}
+                      disabled={!canContinueFromMaterial || isImporting || isExporting}
+                    >
+                      <Play size={16} className="mr-2" />
+                      Realizar anidado
+                    </Button>
+                  )}
                 </div>
               </div>
             </Card>
@@ -503,7 +581,7 @@ export default function App() {
                     <ArrowLeft size={16} className="mr-2" />
                     Volver a material
                   </Button>
-                  <Button variant="secondary" onClick={() => store.reset()}>
+                  <Button variant="secondary" onClick={() => resetProject()}>
                     <RefreshCcw size={16} className="mr-2" />
                     Volver a empezar
                   </Button>
@@ -511,23 +589,65 @@ export default function App() {
                 <div className="flex flex-wrap gap-3">
                   <Button
                     variant="secondary"
-                    onClick={() => store.result && downloadDxf(store.pieces, store.material, store.result)}
-                    disabled={!store.result}
+                    onClick={() => {
+                      if (!store.result) {
+                        return;
+                      }
+
+                      setBusyAction("exporting-dxf");
+                      setStatus("Preparando DXF.");
+                      try {
+                        downloadDxf(store.pieces, store.material, store.result);
+                        setStatus("DXF descargado.");
+                      } finally {
+                        setBusyAction("idle");
+                      }
+                    }}
+                    disabled={!store.result || isExporting}
                   >
                     <Download size={16} className="mr-2" />
-                    Descargar DXF
+                    {busyAction === "exporting-dxf" ? "Generando DXF..." : "Descargar DXF"}
                   </Button>
                   <Button
                     variant="secondary"
-                    onClick={() => store.result && downloadSvg(store.pieces, store.material, store.result)}
-                    disabled={!store.result}
+                    onClick={() => {
+                      if (!store.result) {
+                        return;
+                      }
+
+                      setBusyAction("exporting-svg");
+                      setStatus("Preparando SVG.");
+                      try {
+                        downloadSvg(store.pieces, store.material, store.result);
+                        setStatus("SVG descargado.");
+                      } finally {
+                        setBusyAction("idle");
+                      }
+                    }}
+                    disabled={!store.result || isExporting}
                   >
                     <Download size={16} className="mr-2" />
-                    Descargar SVG
+                    {busyAction === "exporting-svg" ? "Generando SVG..." : "Descargar SVG"}
                   </Button>
-                  <Button onClick={() => store.result && void downloadPdf(store.pieces, store.material, store.result)} disabled={!store.result}>
+                  <Button
+                    onClick={async () => {
+                      if (!store.result) {
+                        return;
+                      }
+
+                      setBusyAction("exporting-pdf");
+                      setStatus("Preparando PDF.");
+                      try {
+                        await downloadPdf(store.pieces, store.material, store.result);
+                        setStatus("PDF descargado.");
+                      } finally {
+                        setBusyAction("idle");
+                      }
+                    }}
+                    disabled={!store.result || isExporting}
+                  >
                     <Download size={16} className="mr-2" />
-                    Descargar PDF
+                    {busyAction === "exporting-pdf" ? "Generando PDF..." : "Descargar PDF"}
                   </Button>
                 </div>
               </div>
@@ -707,10 +827,11 @@ function mergePiecesByShape(pieces: PieceItem[]) {
   const map = new Map<string, PieceItem>();
 
   pieces.forEach((piece) => {
-    const key = `${piece.geometry.width.toFixed(2)}-${piece.geometry.height.toFixed(2)}-${piece.geometry.svgMarkup}`;
+    const key = getGeometrySignature(piece.geometry);
     const existing = map.get(key);
     if (existing) {
       existing.quantity += 1;
+      existing.warnings = Array.from(new Set([...existing.warnings, ...piece.warnings]));
       return;
     }
 
