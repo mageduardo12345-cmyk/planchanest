@@ -6,6 +6,7 @@ import type {
   NestingResult,
   PieceItem
 } from "../types";
+import { normalizeSvgMarkup } from "./geometry";
 
 type Matrix = {
   a: number;
@@ -120,6 +121,77 @@ function createProbeSvg() {
   svg.style.top = "-9999px";
   document.body.appendChild(svg);
   return svg;
+}
+
+function transformSvgPoint(matrix: DOMMatrix | null, point: GeometryPoint) {
+  if (!matrix) {
+    return point;
+  }
+
+  const transformed = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+  return {
+    x: transformed.x,
+    y: transformed.y
+  };
+}
+
+function dedupeClosingPoint(points: GeometryPoint[]) {
+  if (points.length < 2) {
+    return points;
+  }
+
+  const first = points[0];
+  const last = points[points.length - 1];
+  if (Math.abs(first.x - last.x) < 0.001 && Math.abs(first.y - last.y) < 0.001) {
+    return points.slice(0, -1);
+  }
+
+  return points;
+}
+
+function isClosedSvgShape(element: SVGElement) {
+  const tag = element.tagName.toLowerCase();
+  if (["rect", "circle", "ellipse", "polygon"].includes(tag)) {
+    return true;
+  }
+
+  if (tag === "path") {
+    return /z/i.test(element.getAttribute("d") ?? "");
+  }
+
+  return false;
+}
+
+function sampleRenderedSvgElement(element: SVGElement) {
+  const geometryElement = element as SVGGeometryElement;
+  if (typeof geometryElement.getTotalLength !== "function") {
+    return null;
+  }
+
+  const totalLength = geometryElement.getTotalLength();
+  const closed = isClosedSvgShape(element);
+  const tag = element.tagName.toLowerCase();
+  const segments =
+    tag === "line"
+      ? 1
+      : Math.max(24, Math.min(720, Math.ceil(totalLength / 2.5)));
+  const matrix = (element as SVGGraphicsElement).getCTM();
+  const points: GeometryPoint[] = [];
+
+  for (let index = 0; index <= segments; index += 1) {
+    const sample = geometryElement.getPointAtLength((totalLength * index) / segments);
+    points.push(transformSvgPoint(matrix, { x: sample.x, y: sample.y }));
+  }
+
+  const normalized = closed ? dedupeClosingPoint(points) : points;
+  if (normalized.length < 2) {
+    return null;
+  }
+
+  return {
+    points: normalized,
+    closed
+  };
 }
 
 async function loadJsPdf() {
@@ -531,30 +603,46 @@ export function downloadSvg(pieces: PieceItem[], material: MaterialConfig, resul
 
 function buildDxfExportContours(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
   const contours: DxfExportContour[] = [];
+  const probe = createProbeSvg();
 
-  result.placements.forEach((placement) => {
+  result.placements.forEach((placement, placementIndex) => {
     const piece = findPiece(pieces, placement.pieceId);
     if (!piece) {
       return;
     }
 
-    const matrix = getPlacementMatrix(piece, material, placement);
-    piece.geometry.entities.forEach((entity) => {
-      const points = getRenderableEntityPoints(piece, entity, matrix).filter(
+    const group = document.createElementNS(SVG_NS, "g");
+    group.setAttribute(
+      "transform",
+      `translate(${getSheetOffset(material, placement.sheetIndex) + placement.x} ${placement.y}) rotate(${placement.rotation})`
+    );
+    group.setAttribute("data-piece", `${placement.pieceId}-${placementIndex}`);
+    group.innerHTML = normalizeSvgMarkup(piece.geometry.svgMarkup, piece.geometry.sourceBounds);
+    probe.appendChild(group);
+
+    group.querySelectorAll("path,rect,circle,ellipse,polygon,polyline,line").forEach((element) => {
+      const contour = sampleRenderedSvgElement(element as SVGElement);
+      if (!contour) {
+        return;
+      }
+
+      const points = contour.points.filter(
         (point) => Number.isFinite(point.x) && Number.isFinite(point.y)
       );
-
       if (points.length < 2) {
         return;
       }
 
       contours.push({
         points,
-        closed: isClosedEntity(entity)
+        closed: contour.closed
       });
     });
+
+    group.remove();
   });
 
+  probe.remove();
   return contours;
 }
 
