@@ -418,38 +418,19 @@ function getInsUnits(unit) {
   return 4;
 }
 
-function buildSimpleDxf(pieces, material, result) {
-  const { sceneWidth, sceneHeight } = getSceneMetrics(material, result);
+function buildSimpleDxfFromContours(material, usedSheets, contours) {
+  const { sceneWidth, sceneHeight } = getSceneMetrics(material, { usedSheets });
   const entities = [];
 
-  for (const placement of result.placements || []) {
-    const piece = pieces.find((item) => item.id === placement.pieceId);
-    if (!piece) {
+  for (const contour of contours || []) {
+    const validPoints = (contour.points || []).filter(
+      (point) => Number.isFinite(point?.x) && Number.isFinite(point?.y)
+    );
+    if (validPoints.length < 2) {
       continue;
     }
 
-    const translation = {
-      x: getSheetOffset(material, placement.sheetIndex) + placement.x,
-      y: placement.y
-    };
-
-    for (const entity of piece.geometry.entities || []) {
-      if (entity.kind === "circle") {
-        entities.push(buildCircleEntity(entity, translation, placement.rotation, sceneHeight));
-        continue;
-      }
-
-      if (entity.kind === "arc") {
-        entities.push(buildArcEntity(entity, translation, placement.rotation, sceneHeight));
-        continue;
-      }
-
-      const polylines = getEntityPolylines(piece, entity);
-      for (const polyline of polylines) {
-        const transformed = polyline.points.map((point) => transformPoint(point, translation, placement.rotation));
-        entities.push(...polylineToLines(transformed, polyline.closed, sceneHeight));
-      }
-    }
+    entities.push(...polylineToLines(validPoints, Boolean(contour.closed), sceneHeight));
   }
 
   return [
@@ -498,7 +479,11 @@ const server = http.createServer(async (request, response) => {
 
     if (pathname === "/api/export/dxf" && request.method === "POST") {
       const body = await readBody(request);
-      const dxf = buildSimpleDxf(body.pieces || [], body.material || {}, body.result || {});
+      const dxf = buildSimpleDxfFromContours(
+        body.material || { width: 0, height: 0, unit: "mm" },
+        body.usedSheets || 1,
+        body.contours || []
+      );
       sendText(response, 200, dxf, "application/dxf; charset=utf-8");
       return;
     }

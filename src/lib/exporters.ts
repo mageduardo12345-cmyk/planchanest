@@ -24,6 +24,11 @@ type DxfHandleState = {
   current: number;
 };
 
+type DxfExportContour = {
+  points: GeometryPoint[];
+  closed: boolean;
+};
+
 type SimplePathSegment =
   | { kind: "move"; point: GeometryPoint }
   | { kind: "line"; point: GeometryPoint }
@@ -524,23 +529,69 @@ export function downloadSvg(pieces: PieceItem[], material: MaterialConfig, resul
   createDownload("nesting-resultado.svg", buildResultSvg(pieces, material, result), "image/svg+xml;charset=utf-8");
 }
 
+function buildDxfExportContours(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
+  const contours: DxfExportContour[] = [];
+
+  result.placements.forEach((placement) => {
+    const piece = findPiece(pieces, placement.pieceId);
+    if (!piece) {
+      return;
+    }
+
+    const matrix = getPlacementMatrix(piece, material, placement);
+    piece.geometry.entities.forEach((entity) => {
+      const points = getRenderableEntityPoints(piece, entity, matrix).filter(
+        (point) => Number.isFinite(point.x) && Number.isFinite(point.y)
+      );
+
+      if (points.length < 2) {
+        return;
+      }
+
+      contours.push({
+        points,
+        closed: isClosedEntity(entity)
+      });
+    });
+  });
+
+  return contours;
+}
+
 async function downloadDxfFromApi(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
-  const baseUrl = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ?? "";
+  const baseUrl = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL?.trim() ?? "";
+  if (!baseUrl) {
+    throw new Error("Falta configurar la exportacion DXF del servidor.");
+  }
+
+  const contours = buildDxfExportContours(pieces, material, result);
+  if (!contours.length) {
+    throw new Error("No hay contornos validos para exportar a DXF.");
+  }
+
   const endpoint = `${baseUrl.replace(/\/$/, "")}/api/export/dxf`;
   const response = await fetch(endpoint, {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ pieces, material, result })
+    body: JSON.stringify({
+      material,
+      usedSheets: result.usedSheets || 1,
+      contours
+    })
   });
 
   if (!response.ok) {
     throw new Error("No fue posible generar el DXF en el servidor.");
   }
 
-  const blob = await response.blob();
-  createDownload("nesting-resultado.dxf", blob, "application/dxf");
+  const dxf = await response.text();
+  if (!dxf.trim().startsWith("0")) {
+    throw new Error("El servidor no devolvio un DXF valido.");
+  }
+
+  createDownload("nesting-resultado.dxf", dxf, "application/dxf");
 }
 
 function drawPolylinePdf(doc: jsPDF, points: GeometryPoint[], closed: boolean, sceneHeight: number) {
@@ -1253,9 +1304,5 @@ export function buildResultDxf(pieces: PieceItem[], material: MaterialConfig, re
 }
 
 export async function downloadDxf(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
-  try {
-    await downloadDxfFromApi(pieces, material, result);
-  } catch {
-    createDownload("nesting-resultado.dxf", buildResultDxf(pieces, material, result), "application/dxf");
-  }
+  await downloadDxfFromApi(pieces, material, result);
 }
