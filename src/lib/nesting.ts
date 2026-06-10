@@ -308,9 +308,32 @@ function contourBounds(contour: SampledContour) {
 }
 
 function segmentsIntersect(a1: GeometryPoint, a2: GeometryPoint, b1: GeometryPoint, b2: GeometryPoint) {
+  const epsilon = 0.000001;
+  const cross = (
+    p1: GeometryPoint,
+    p2: GeometryPoint,
+    p3: GeometryPoint
+  ) => (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
+  const onSegment = (start: GeometryPoint, point: GeometryPoint, end: GeometryPoint) =>
+    point.x >= Math.min(start.x, end.x) - epsilon &&
+    point.x <= Math.max(start.x, end.x) + epsilon &&
+    point.y >= Math.min(start.y, end.y) - epsilon &&
+    point.y <= Math.max(start.y, end.y) + epsilon;
+
   const denominator = (a2.x - a1.x) * (b2.y - b1.y) - (a2.y - a1.y) * (b2.x - b1.x);
-  if (Math.abs(denominator) < 0.000001) {
-    return false;
+  if (Math.abs(denominator) < epsilon) {
+    const crossA = cross(a1, a2, b1);
+    const crossB = cross(a1, a2, b2);
+    if (Math.abs(crossA) > epsilon || Math.abs(crossB) > epsilon) {
+      return false;
+    }
+
+    return (
+      onSegment(a1, b1, a2) ||
+      onSegment(a1, b2, a2) ||
+      onSegment(b1, a1, b2) ||
+      onSegment(b1, a2, b2)
+    );
   }
 
   const ua = ((b2.x - b1.x) * (a1.y - b1.y) - (b2.y - b1.y) * (a1.x - b1.x)) / denominator;
@@ -319,6 +342,21 @@ function segmentsIntersect(a1: GeometryPoint, a2: GeometryPoint, b1: GeometryPoi
 }
 
 function pointInPolygon(point: GeometryPoint, polygon: GeometryPoint[]) {
+  const epsilon = 0.000001;
+  const isPointOnSegment = (start: GeometryPoint, end: GeometryPoint) => {
+    const cross = (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x);
+    if (Math.abs(cross) > epsilon) {
+      return false;
+    }
+
+    return (
+      point.x >= Math.min(start.x, end.x) - epsilon &&
+      point.x <= Math.max(start.x, end.x) + epsilon &&
+      point.y >= Math.min(start.y, end.y) - epsilon &&
+      point.y <= Math.max(start.y, end.y) + epsilon
+    );
+  };
+
   let inside = false;
 
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
@@ -326,6 +364,10 @@ function pointInPolygon(point: GeometryPoint, polygon: GeometryPoint[]) {
     const yi = polygon[i].y;
     const xj = polygon[j].x;
     const yj = polygon[j].y;
+
+    if (isPointOnSegment(polygon[j], polygon[i])) {
+      return true;
+    }
 
     const intersects =
       yi > point.y !== yj > point.y &&

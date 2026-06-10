@@ -202,18 +202,6 @@ async function loadJsPdf() {
   return jsPdfModulePromise;
 }
 
-async function loadSvg2Pdf() {
-  if (!svg2PdfModulePromise) {
-    const baseUrl = (import.meta as ImportMeta & { env?: { BASE_URL?: string } }).env?.BASE_URL ?? "/";
-    const moduleUrl = `${baseUrl.replace(/\/?$/, "/")}vendor/svg2pdf.es.js`;
-    svg2PdfModulePromise = import(/* @vite-ignore */ moduleUrl) as Promise<{
-      svg2pdf: (element: Element, pdf: jsPDF, options?: Record<string, unknown>) => Promise<void>;
-    }>;
-  }
-
-  return svg2PdfModulePromise;
-}
-
 function samplePathPoints(pathData: string, offsetX = 0, offsetY = 0) {
   const probe = createProbeSvg();
   const path = document.createElementNS(SVG_NS, "path");
@@ -579,14 +567,11 @@ export function buildResultSvg(pieces: PieceItem[], material: MaterialConfig, re
 
       const offsetX = getSheetOffset(material, placement.sheetIndex) + placement.x;
       const offsetY = placement.y;
-      const originalOffsetX = piece.geometry.sourceBounds.minX;
-      const originalOffsetY = piece.geometry.sourceBounds.minY;
+      const normalizedMarkup = normalizeSvgMarkup(piece.geometry.svgMarkup, piece.geometry.sourceBounds);
 
       return `
         <g transform="translate(${offsetX} ${offsetY}) rotate(${placement.rotation})">
-          ${piece.geometry.entities
-            .map((entity) => entityToSvg(entity, originalOffsetX, originalOffsetY))
-            .join("")}
+          ${normalizedMarkup}
         </g>
       `;
     })
@@ -699,23 +684,17 @@ function drawPolylinePdf(doc: jsPDF, points: GeometryPoint[], closed: boolean, s
 export async function downloadPdf(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
   const { sceneWidth, sceneHeight } = getSceneMetrics(material, result);
   const { jsPDF } = await loadJsPdf();
-  const { svg2pdf } = await loadSvg2Pdf();
   const doc = new jsPDF({
     orientation: sceneWidth >= sceneHeight ? "landscape" : "portrait",
     unit: "mm",
-  format: [sceneWidth, sceneHeight]
+    format: [sceneWidth, sceneHeight]
   });
 
-  const parser = new DOMParser();
-  const svgText = buildResultSvg(pieces, material, result);
-  const svgDocument = parser.parseFromString(svgText, "image/svg+xml");
-  const svgElement = svgDocument.documentElement;
-
-  await svg2pdf(svgElement, doc, {
-    x: 0,
-    y: 0,
-    width: sceneWidth,
-    height: sceneHeight
+  doc.setDrawColor(17, 17, 17);
+  doc.setLineWidth(0.2);
+  const contours = buildDxfExportContours(pieces, material, result);
+  contours.forEach((contour) => {
+    drawPolylinePdf(doc, contour.points, contour.closed, sceneHeight);
   });
 
   doc.save("nesting-resultado.pdf");
