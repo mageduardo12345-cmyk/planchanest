@@ -414,24 +414,48 @@ function transformPolylinePoints(points: GeometryPoint[], matrix: Matrix) {
 function getRenderableEntityPoints(piece: PieceItem, entity: GeometryEntity, matrix: Matrix) {
   const offsetX = piece.geometry.sourceBounds.minX;
   const offsetY = piece.geometry.sourceBounds.minY;
+  const normalizePoint = (point: GeometryPoint) => ({
+    x: point.x - offsetX,
+    y: point.y - offsetY
+  });
 
   switch (entity.kind) {
     case "polyline":
-      return transformPolylinePoints(entity.points, matrix);
+      return transformPolylinePoints(entity.points.map(normalizePoint), matrix);
     case "circle":
       return transformPolylinePoints(
-        sampleEllipsePoints(entity.cx, entity.cy, entity.r, entity.r, 0, 96),
+        sampleEllipsePoints(entity.cx - offsetX, entity.cy - offsetY, entity.r, entity.r, 0, 96),
         matrix
       );
     case "ellipse":
       return transformPolylinePoints(
-        sampleEllipsePoints(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation, 96),
+        sampleEllipsePoints(entity.cx - offsetX, entity.cy - offsetY, entity.rx, entity.ry, entity.rotation, 96),
         matrix
       );
     case "ellipseArc":
-      return transformPolylinePoints(sampleEllipseArcPoints(entity, 96), matrix);
+      return transformPolylinePoints(
+        sampleEllipseArcPoints(
+          {
+            ...entity,
+            cx: entity.cx - offsetX,
+            cy: entity.cy - offsetY
+          },
+          96
+        ),
+        matrix
+      );
     case "arc":
-      return transformPolylinePoints(sampleArcPoints(entity, 72), matrix);
+      return transformPolylinePoints(
+        sampleArcPoints(
+          {
+            ...entity,
+            cx: entity.cx - offsetX,
+            cy: entity.cy - offsetY
+          },
+          72
+        ),
+        matrix
+      );
     case "path":
       return transformPolylinePoints(samplePathPoints(entity.d, offsetX, offsetY), matrix);
     default:
