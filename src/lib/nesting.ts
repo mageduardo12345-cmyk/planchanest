@@ -83,7 +83,7 @@ function samplePath(pathData: string, offsetX: number, offsetY: number, closed: 
   probe.appendChild(path);
 
   const length = path.getTotalLength();
-  const segments = Math.max(36, Math.min(900, Math.ceil(length / 2.5)));
+  const segments = Math.max(18, Math.min(240, Math.ceil(length / 6)));
   const points: GeometryPoint[] = [];
 
   for (let index = 0; index <= segments; index += 1) {
@@ -123,7 +123,7 @@ function normalizeArcSweep(startAngle: number, endAngle: number) {
   return sweep;
 }
 
-function sampleArc(entity: Extract<GeometryEntity, { kind: "arc" }>, segments = 48) {
+function sampleArc(entity: Extract<GeometryEntity, { kind: "arc" }>, segments = 24) {
   const sweep = normalizeArcSweep(entity.startAngle, entity.endAngle);
   const points: GeometryPoint[] = [];
 
@@ -138,7 +138,7 @@ function sampleArc(entity: Extract<GeometryEntity, { kind: "arc" }>, segments = 
   return points;
 }
 
-function sampleEllipseArc(entity: Extract<GeometryEntity, { kind: "ellipseArc" }>, segments = 72) {
+function sampleEllipseArc(entity: Extract<GeometryEntity, { kind: "ellipseArc" }>, segments = 32) {
   let sweep = entity.endAngle - entity.startAngle;
   while (sweep <= 0) {
     sweep += Math.PI * 2;
@@ -169,18 +169,18 @@ function sampleEntityContours(piece: PieceItem, entity: GeometryEntity): Sampled
     case "polyline":
       return [{ points: dedupeTrailingPoint(entity.points), closed: entity.closed }];
     case "circle":
-      return [{ points: sampleEllipse(entity.cx, entity.cy, entity.r, entity.r, 0, 96), closed: true }];
+      return [{ points: sampleEllipse(entity.cx, entity.cy, entity.r, entity.r, 0, 32), closed: true }];
     case "ellipse":
       return [
         {
-          points: sampleEllipse(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation, 96),
+          points: sampleEllipse(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation, 32),
           closed: true
         }
       ];
     case "ellipseArc":
-      return [{ points: sampleEllipseArc(entity, 96), closed: false }];
+      return [{ points: sampleEllipseArc(entity, 32), closed: false }];
     case "arc":
-      return [{ points: sampleArc(entity, 72), closed: false }];
+      return [{ points: sampleArc(entity, 24), closed: false }];
     case "path": {
       const subpaths = entity.d.match(/[Mm][^Mm]*/g) ?? [];
       return subpaths.map((subpath) => samplePath(subpath, offsetX, offsetY, /z/i.test(subpath)));
@@ -462,47 +462,40 @@ function placementCollides(
 }
 
 function candidateCoordinates(
-  prepared: PreparedPiece,
   placements: PreparedPlacement[],
   material: { width: number; height: number },
   config: NestingConfig
 ) {
   const xCandidates = new Set<number>([config.edgeGap]);
   const yCandidates = new Set<number>([config.edgeGap]);
-  const contourX = prepared.variants.flatMap((variant) =>
-    variant.contours.flatMap((contour) => contour.points.map((point) => point.x))
-  );
-  const contourY = prepared.variants.flatMap((variant) =>
-    variant.contours.flatMap((contour) => contour.points.map((point) => point.y))
-  );
 
   placements.forEach((placement) => {
     xCandidates.add(round(placement.x + placement.width + config.pieceGap));
     yCandidates.add(round(placement.y + placement.height + config.pieceGap));
     xCandidates.add(round(placement.x));
     yCandidates.add(round(placement.y));
-
-    placement.contours.forEach((contour) => {
-      contour.points.forEach((point) => {
-        xCandidates.add(round(point.x + config.pieceGap));
-        yCandidates.add(round(point.y + config.pieceGap));
-        contourX.forEach((offsetX) => {
-          xCandidates.add(round(point.x - offsetX));
-        });
-        contourY.forEach((offsetY) => {
-          yCandidates.add(round(point.y - offsetY));
-        });
-      });
-    });
   });
 
+  const gridStep = Math.max(20, Math.round(config.pieceGap + config.kerf + 12));
+  for (let x = config.edgeGap; x <= material.width - config.edgeGap; x += gridStep) {
+    xCandidates.add(round(x));
+  }
+  for (let y = config.edgeGap; y <= material.height - config.edgeGap; y += gridStep) {
+    yCandidates.add(round(y));
+  }
+
+  const orderedX = [...xCandidates]
+    .filter((value) => value >= config.edgeGap && value <= material.width - config.edgeGap)
+    .sort((a, b) => a - b)
+    .slice(0, 120);
+  const orderedY = [...yCandidates]
+    .filter((value) => value >= config.edgeGap && value <= material.height - config.edgeGap)
+    .sort((a, b) => a - b)
+    .slice(0, 120);
+
   return {
-    x: [...xCandidates]
-      .filter((value) => value >= config.edgeGap && value <= material.width - config.edgeGap)
-      .sort((a, b) => a - b),
-    y: [...yCandidates]
-      .filter((value) => value >= config.edgeGap && value <= material.height - config.edgeGap)
-      .sort((a, b) => a - b)
+    x: orderedX,
+    y: orderedY
   };
 }
 
@@ -512,7 +505,7 @@ function findBestPlacement(
   material: { width: number; height: number },
   config: NestingConfig
 ) {
-  const candidates = candidateCoordinates(prepared, sheetPlacements, material, config);
+  const candidates = candidateCoordinates(sheetPlacements, material, config);
   let best:
     | {
         x: number;
@@ -522,24 +515,24 @@ function findBestPlacement(
       }
     | undefined;
 
-  prepared.variants.forEach((variant) => {
-    candidates.y.forEach((y) => {
-      candidates.x.forEach((x) => {
+  for (const variant of prepared.variants) {
+    for (const y of candidates.y) {
+      for (const x of candidates.x) {
         if (!fitsMaterial(x, y, variant, material, config)) {
-          return;
+          continue;
         }
 
         if (placementCollides(x, y, variant, sheetPlacements, config)) {
-          return;
+          continue;
         }
 
         const score = y * material.width + x + variant.height * 0.01 + variant.width * 0.001;
         if (!best || score < best.score) {
           best = { x, y, variant, score };
         }
-      });
-    });
-  });
+      }
+    }
+  }
 
   return best;
 }
@@ -568,7 +561,8 @@ async function computeNesting(
     await wait(config.quality === "quality" ? 180 : 90);
   }
 
-  expanded.forEach((prepared, index) => {
+  for (let index = 0; index < expanded.length; index += 1) {
+    const prepared = expanded[index];
     let placed = false;
 
     for (let sheetIndex = 0; sheetIndex < material.sheetCount; sheetIndex += 1) {
@@ -609,7 +603,11 @@ async function computeNesting(
     if (!placed) {
       unplaced.push(prepared.pieceId);
     }
-  });
+
+    if (index % 3 === 2) {
+      await wait(0);
+    }
+  }
 
   const elapsedMs = performance.now() - startedAt;
   const usedSheets = placements.length ? Math.max(...placements.map((item) => item.sheetIndex)) + 1 : 0;
