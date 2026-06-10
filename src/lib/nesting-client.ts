@@ -1,4 +1,4 @@
-import { runNesting } from "./nesting";
+import { preparePiecesForNesting } from "./nesting";
 import type { NestingConfig, NestingResult, PieceItem } from "../types";
 
 export interface NestingRunHandle {
@@ -14,39 +14,52 @@ export function runNestingInWorker(
 ): NestingRunHandle {
   let settled = false;
   let rejectPromise: ((reason?: unknown) => void) | null = null;
+  const preparedPieces = preparePiecesForNesting(pieces, config);
+  const worker = new Worker(new URL("./nesting.worker.ts", import.meta.url), { type: "module" });
 
   const promise = new Promise<NestingResult>((resolve, reject) => {
     rejectPromise = reject;
+    worker.onmessage = (event: MessageEvent<
+      | { type: "progress"; message: string; value: number }
+      | { type: "result"; result: NestingResult }
+      | { type: "error"; message: string }
+    >) => {
+      if (event.data.type === "progress") {
+        onProgress?.(event.data.message, event.data.value);
+        return;
+      }
 
-    // Temporary stable path: the nesting core still samples SVG geometry with DOM APIs,
-    // so running it inside a worker breaks on real browsers where `document` is unavailable.
-    setTimeout(async () => {
       if (settled) {
         return;
       }
 
-      try {
-        const result = await runNesting(pieces, material, config, (message, value) => {
-          if (!settled) {
-            onProgress?.(message, value);
-          }
-        });
+      settled = true;
+      worker.terminate();
 
-        if (settled) {
-          return;
-        }
-
-        settled = true;
-        resolve(result);
-      } catch (error) {
-        if (settled) {
-          return;
-        }
-
-        settled = true;
-        reject(error instanceof Error ? error : new Error("No fue posible completar el anidado."));
+      if (event.data.type === "result") {
+        resolve(event.data.result);
+        return;
       }
-    }, 0);
+
+      reject(new Error(event.data.message));
+    };
+
+    worker.onerror = () => {
+      if (settled) {
+        return;
+      }
+
+      settled = true;
+      worker.terminate();
+      reject(new Error("No fue posible iniciar el proceso de anidado."));
+    };
+
+    worker.postMessage({
+      type: "run",
+      preparedPieces,
+      material,
+      config
+    });
   });
 
   return {
@@ -57,6 +70,7 @@ export function runNestingInWorker(
       }
 
       settled = true;
+      worker.terminate();
       rejectPromise?.(new Error("Anidado cancelado."));
     }
   };

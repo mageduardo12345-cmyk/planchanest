@@ -1,9 +1,9 @@
-import { runNesting } from "./nesting";
-import type { NestingConfig, PieceItem } from "../types";
+import { runPreparedNesting, type PreparedPiece } from "./nesting";
+import type { NestingConfig } from "../types";
 
 type NestingWorkerRequest = {
   type: "run";
-  pieces: PieceItem[];
+  preparedPieces: PreparedPiece[];
   material: { width: number; height: number; sheetCount: number };
   config: NestingConfig;
 };
@@ -16,7 +16,7 @@ type NestingWorkerResponse =
     }
   | {
       type: "result";
-      result: Awaited<ReturnType<typeof runNesting>>;
+      result: Awaited<ReturnType<typeof runPreparedNesting>>;
     }
   | {
       type: "error";
@@ -29,8 +29,8 @@ self.onmessage = async (event: MessageEvent<NestingWorkerRequest>) => {
   }
 
   try {
-    const result = await runNesting(
-      event.data.pieces,
+    const result = await runPreparedNesting(
+      event.data.preparedPieces,
       event.data.material,
       event.data.config,
       (message, value) => {

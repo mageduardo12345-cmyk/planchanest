@@ -1,7 +1,7 @@
 import type { GeometryEntity, GeometryPoint, NestingConfig, NestingResult, PieceItem, Placement } from "../types";
 import { wait } from "./utils";
 
-interface SampledContour {
+export interface SampledContour {
   points: GeometryPoint[];
   closed: boolean;
 }
@@ -13,7 +13,7 @@ interface PieceVariant {
   contours: SampledContour[];
 }
 
-interface PreparedPiece {
+export interface PreparedPiece {
   pieceId: string;
   area: number;
   variants: PieceVariant[];
@@ -284,6 +284,10 @@ function expandPieces(pieces: PieceItem[], config: NestingConfig) {
   return expanded.sort((a, b) => (config.prioritizeLarge ? b.area - a.area : 0));
 }
 
+export function preparePiecesForNesting(pieces: PieceItem[], config: NestingConfig) {
+  return expandPieces(pieces, config);
+}
+
 function translateContours(contours: SampledContour[], x: number, y: number) {
   return contours.map((contour) => ({
     ...contour,
@@ -540,14 +544,13 @@ function findBestPlacement(
   return best;
 }
 
-export async function runNesting(
-  pieces: PieceItem[],
+async function computeNesting(
+  expanded: PreparedPiece[],
   material: { width: number; height: number; sheetCount: number },
   config: NestingConfig,
   onProgress?: (message: string, value: number) => void
 ) {
   const startedAt = performance.now();
-  const expanded = expandPieces(pieces, config);
   const placements: Placement[] = [];
   const sheetPlacements = Array.from({ length: material.sheetCount }).map(() => [] as PreparedPlacement[]);
   const unplaced: string[] = [];
@@ -629,4 +632,23 @@ export async function runNesting(
 
   onProgress?.("Resultado listo.", 1);
   return result;
+}
+
+export async function runPreparedNesting(
+  preparedPieces: PreparedPiece[],
+  material: { width: number; height: number; sheetCount: number },
+  config: NestingConfig,
+  onProgress?: (message: string, value: number) => void
+) {
+  return computeNesting(preparedPieces, material, config, onProgress);
+}
+
+export async function runNesting(
+  pieces: PieceItem[],
+  material: { width: number; height: number; sheetCount: number },
+  config: NestingConfig,
+  onProgress?: (message: string, value: number) => void
+) {
+  const prepared = preparePiecesForNesting(pieces, config);
+  return computeNesting(prepared, material, config, onProgress);
 }

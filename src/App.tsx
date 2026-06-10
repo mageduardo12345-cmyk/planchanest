@@ -16,7 +16,7 @@ import PreviewCanvas from "./components/PreviewCanvas";
 import StepsBar from "./components/StepsBar";
 import { Button, Card, Label, Metric } from "./components/ui";
 import { downloadDxf, downloadPdf, downloadSvg } from "./lib/exporters";
-import { getGeometrySignature, normalizeSvgMarkup } from "./lib/geometry";
+import { normalizeSvgMarkup } from "./lib/geometry";
 import { importFiles } from "./lib/importers";
 import { runNestingInWorker, type NestingRunHandle } from "./lib/nesting-client";
 import { formatMeasure } from "./lib/units";
@@ -76,7 +76,7 @@ export default function App() {
     try {
       const files = Array.from(fileList);
       const { pieces, messages } = await importFiles(files);
-      store.setPieces(mergePiecesByShape(pieces));
+      store.setPieces(pieces);
       store.setMessages(messages);
       store.setResult(null);
       store.setStep("piezas");
@@ -94,7 +94,7 @@ export default function App() {
       const blob = await response.blob();
       const demo = new File([blob], "demo.svg", { type: "image/svg+xml" });
       const { pieces, messages } = await importFiles([demo]);
-      store.setPieces(mergePiecesByShape(pieces));
+      store.setPieces(pieces);
       store.setMessages(messages);
       store.setResult(null);
       store.setStep("piezas");
@@ -298,6 +298,9 @@ export default function App() {
                   <p className="mt-2 text-sm text-ink/65">
                     Revisa las piezas cargadas, ajusta cantidades y deja lista la seleccion antes de
                     pasar al material.
+                  </p>
+                  <p className="mt-2 text-sm font-medium text-accentDeep">
+                    {store.pieces.length} piezas cargadas en total.
                   </p>
                 </div>
               </div>
@@ -821,22 +824,4 @@ function warningLabel(warning: PieceItem["warnings"][number]) {
     default:
       return "Advertencia";
   }
-}
-
-function mergePiecesByShape(pieces: PieceItem[]) {
-  const map = new Map<string, PieceItem>();
-
-  pieces.forEach((piece) => {
-    const key = getGeometrySignature(piece.geometry);
-    const existing = map.get(key);
-    if (existing) {
-      existing.quantity += 1;
-      existing.warnings = Array.from(new Set([...existing.warnings, ...piece.warnings]));
-      return;
-    }
-
-    map.set(key, piece);
-  });
-
-  return Array.from(map.values());
 }
