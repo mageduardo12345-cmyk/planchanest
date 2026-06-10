@@ -592,7 +592,7 @@ export default function App() {
                 <div className="flex flex-wrap gap-3">
                   <Button
                     variant="secondary"
-                    onClick={() => {
+                    onClick={async () => {
                       if (!store.result) {
                         return;
                       }
@@ -600,7 +600,7 @@ export default function App() {
                       setBusyAction("exporting-dxf");
                       setStatus("Preparando DXF.");
                       try {
-                        downloadDxf(store.pieces, store.material, store.result);
+                        await downloadDxf(store.pieces, store.material, store.result);
                         setStatus("DXF descargado.");
                       } finally {
                         setBusyAction("idle");

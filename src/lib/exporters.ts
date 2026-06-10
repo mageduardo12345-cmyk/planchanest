@@ -524,6 +524,25 @@ export function downloadSvg(pieces: PieceItem[], material: MaterialConfig, resul
   createDownload("nesting-resultado.svg", buildResultSvg(pieces, material, result), "image/svg+xml;charset=utf-8");
 }
 
+async function downloadDxfFromApi(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
+  const baseUrl = (import.meta as ImportMeta & { env?: { VITE_API_BASE_URL?: string } }).env?.VITE_API_BASE_URL ?? "";
+  const endpoint = `${baseUrl.replace(/\/$/, "")}/api/export/dxf`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ pieces, material, result })
+  });
+
+  if (!response.ok) {
+    throw new Error("No fue posible generar el DXF en el servidor.");
+  }
+
+  const blob = await response.blob();
+  createDownload("nesting-resultado.dxf", blob, "application/dxf");
+}
+
 function drawPolylinePdf(doc: jsPDF, points: GeometryPoint[], closed: boolean, sceneHeight: number) {
   if (points.length < 2) {
     return;
@@ -1233,6 +1252,10 @@ export function buildResultDxf(pieces: PieceItem[], material: MaterialConfig, re
   ].join("");
 }
 
-export function downloadDxf(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
-  createDownload("nesting-resultado.dxf", buildResultDxf(pieces, material, result), "application/dxf");
+export async function downloadDxf(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
+  try {
+    await downloadDxfFromApi(pieces, material, result);
+  } catch {
+    createDownload("nesting-resultado.dxf", buildResultDxf(pieces, material, result), "application/dxf");
+  }
 }

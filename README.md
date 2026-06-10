@@ -9,6 +9,14 @@ npm install
 npm run dev
 ```
 
+Para correr la version que usa backend local o Render:
+
+```bash
+npm install
+npm run build
+npm run start
+```
+
 Si prefieres `pnpm`:
 
 ```bash
@@ -23,7 +31,7 @@ pnpm dev
 3. Edicion de cantidad, nombre, activacion y eliminacion de piezas
 4. Configuracion de material, margenes, kerf, rotaciones y calidad
 5. Nesting heuristico local con multiples placas
-6. Vista previa, metricas y descarga en `SVG` y `PDF`
+6. Vista previa, metricas y descarga en `DXF`, `SVG` y `PDF`
 
 ## Alcance tecnico actual
 
@@ -31,6 +39,7 @@ pnpm dev
 - `DXF`: soporte local funcional con compatibilidad parcial segun entidad
 - `DWG`: no se parsea directamente en esta version; se recomienda convertir a `DXF`
 - algoritmo: heuristica `shelf / bottom-left` basada en cajas de contencion, preparada para evolucionar a nesting poligonal mas preciso
+- exportacion `DXF`: ahora puede salir desde backend para mejorar compatibilidad con AutoCAD
 - exportacion `SVG`: util para mantener una salida vectorial local
 - exportacion `PDF`: reporte visual del acomodo
 
