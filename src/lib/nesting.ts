@@ -402,12 +402,48 @@ function scoreSignature(
   ].join("::");
 }
 
+function filterOpenContoursForNesting(closedContours: SampledContour[], openContours: SampledContour[]) {
+  if (!closedContours.length) {
+    return openContours;
+  }
+
+  const getBounds = (contour: SampledContour) => ({
+    minX: Math.min(...contour.points.map((point) => point.x)),
+    minY: Math.min(...contour.points.map((point) => point.y)),
+    maxX: Math.max(...contour.points.map((point) => point.x)),
+    maxY: Math.max(...contour.points.map((point) => point.y))
+  });
+
+  const solidBounds = closedContours
+    .filter((contour) => !contour.isHole && contour.points.length >= 3)
+    .map(getBounds);
+
+  if (!solidBounds.length) {
+    return openContours;
+  }
+
+  const tolerance = 0.5;
+  return openContours.filter((contour) => {
+    const bounds = getBounds(contour);
+    return solidBounds.some(
+      (solid) =>
+        bounds.minX >= solid.minX - tolerance &&
+        bounds.maxX <= solid.maxX + tolerance &&
+        bounds.minY >= solid.minY - tolerance &&
+        bounds.maxY <= solid.maxY + tolerance
+    );
+  });
+}
+
 function preparePiece(piece: PieceItem, config: NestingConfig): PreparedPiece | null {
   const sampledContours = piece.geometry.entities.flatMap((entity) => sampleEntityContours(piece, entity));
   const closedContours = classifyClosedContours(
     sampledContours.filter((contour) => contour.closed && contour.points.length >= 3)
   );
-  const openContours = sampledContours.filter((contour) => !contour.closed && contour.points.length >= 2);
+  const openContours = filterOpenContoursForNesting(
+    closedContours,
+    sampledContours.filter((contour) => !contour.closed && contour.points.length >= 2)
+  );
   const baseContours = [...closedContours, ...openContours];
 
   if (!baseContours.length) {

@@ -70,6 +70,86 @@ describe("contour-based nesting", () => {
     );
   });
 
+  it("ignores stray open contours outside the closed silhouette during nesting", async () => {
+    const noisySquare = {
+      svgMarkup: "",
+      width: 32,
+      height: 28,
+      area: 400,
+      sourceBounds: { minX: -12, minY: 0, maxX: 20, maxY: 28 },
+      closed: true,
+      hasCurves: false,
+      hasHoles: false,
+      entities: [
+        {
+          kind: "polyline" as const,
+          closed: true,
+          points: [
+            { x: 0, y: 0 },
+            { x: 20, y: 0 },
+            { x: 20, y: 20 },
+            { x: 0, y: 20 }
+          ]
+        },
+        {
+          kind: "polyline" as const,
+          closed: false,
+          points: [
+            { x: -12, y: 8 },
+            { x: -2, y: 8 }
+          ]
+        },
+        {
+          kind: "polyline" as const,
+          closed: false,
+          points: [
+            { x: -7, y: 3 },
+            { x: -7, y: 13 }
+          ]
+        }
+      ]
+    };
+
+    const pieces: PieceItem[] = [
+      {
+        id: "noisy-a",
+        name: "Noisy A",
+        quantity: 1,
+        enabled: true,
+        sourceFile: "demo.dxf",
+        warnings: [],
+        geometry: noisySquare
+      },
+      {
+        id: "noisy-b",
+        name: "Noisy B",
+        quantity: 1,
+        enabled: true,
+        sourceFile: "demo.dxf",
+        warnings: [],
+        geometry: noisySquare
+      }
+    ];
+
+    const result = await runNesting(
+      pieces,
+      { width: 44, height: 20, sheetCount: 1 },
+      {
+        pieceGap: 2,
+        edgeGap: 0,
+        kerf: 0,
+        rotations: "orthogonal",
+        quality: "fast",
+        maxTimeMs: 4000,
+        keepOrientation: false,
+        prioritizeLarge: true
+      }
+    );
+
+    expect(result.unplaced).toHaveLength(0);
+    expect(result.placements).toHaveLength(2);
+  });
+
   it("places polyline contour pieces without falling back to invalid overlap", async () => {
     const pieces: PieceItem[] = [
       {
