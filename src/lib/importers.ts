@@ -1,6 +1,8 @@
 import DxfParser from "dxf-parser";
-import { buildPieceGeometry } from "./geometry";
+import { normalizePolylineEntity } from "./contours";
+import { buildPieceGeometry, entitiesFromSvgElement } from "./geometry";
 import { convertDwgToSvg } from "./dwg";
+import { sampleArcPoints, sampleEllipseArcPoints, sampleEllipsePoints, samplePathPoints } from "./sampling";
 import { slugId } from "./utils";
 import type { GeometryEntity, GeometryWarning, PieceGeometry, PieceItem } from "../types";
 
@@ -79,28 +81,16 @@ function pieceFromSvgElement(
   return createPiece(sourceFile, idx, [...new Set(warnings)], geometry);
 }
 
-function importSvgText(text: string, sourceFile: string): PieceItem[] {
-  const parser = new DOMParser();
-  const doc = parser.parseFromString(text, "image/svg+xml");
-  const svgRoot = doc.documentElement;
-  const allowed = ["path", "rect", "circle", "ellipse", "polygon", "polyline"];
-  const probe = createProbeSvg();
-  const pieces: PieceItem[] = [];
+function entityFormsClosedPiece(entity: GeometryEntity) {
+  if (entity.kind === "polyline" || entity.kind === "path") {
+    return entity.closed;
+  }
 
-  Array.from(svgRoot.querySelectorAll(allowed.join(","))).forEach((node, idx) => {
-    const imported = document.importNode(node, true) as SVGGraphicsElement;
-    probe.appendChild(imported);
-    try {
-      pieces.push(pieceFromSvgElement(imported, sourceFile, idx));
-    } catch {
-      pieces.push(createPiece(sourceFile, idx, ["invalid-shape"]));
-    } finally {
-      imported.remove();
-    }
-  });
+  return entity.kind !== "arc" && entity.kind !== "ellipseArc";
+}
 
-  probe.remove();
-  return pieces;
+export function splitCompoundPathData(pathData: string) {
+  return (pathData.match(/[Mm][^Mm]*/g) ?? []).map((subpath) => subpath.trim()).filter(Boolean);
 }
 
 function appendSvgElementFromDxfEntity(entity: GeometryEntity) {
@@ -144,16 +134,7 @@ function appendSvgElementFromDxfEntity(entity: GeometryEntity) {
       return el;
     }
     case "ellipseArc": {
-      const points = sampleEllipseArcGeometryPoints(
-        entity.cx,
-        entity.cy,
-        entity.rx,
-        entity.ry,
-        entity.rotation,
-        entity.startAngle,
-        entity.endAngle,
-        96
-      );
+      const points = sampleEllipseArcPoints(entity, 96);
       const start = points[0];
       const end = points[points.length - 1];
       if (!start || !end) {
@@ -217,6 +198,129 @@ type DxfGeometryItem = {
 
 type ParsedDxfEntity = Record<string, unknown>;
 
+type SvgMatrix = {
+  a: number;
+  b: number;
+  c: number;
+  d: number;
+  e: number;
+  f: number;
+};
+
+function identityMatrix(): SvgMatrix {
+  return { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+}
+
+function multiplySvgMatrices(left: SvgMatrix, right: SvgMatrix): SvgMatrix {
+  return {
+    a: left.a * right.a + left.c * right.b,
+    b: left.b * right.a + left.d * right.b,
+    c: left.a * right.c + left.c * right.d,
+    d: left.b * right.c + left.d * right.d,
+    e: left.a * right.e + left.c * right.f + left.e,
+    f: left.b * right.e + left.d * right.f + left.f
+  };
+}
+
+function applySvgMatrix(matrix: SvgMatrix, point: { x: number; y: number }) {
+  return {
+    x: matrix.a * point.x + matrix.c * point.y + matrix.e,
+    y: matrix.b * point.x + matrix.d * point.y + matrix.f
+  };
+}
+
+function translateSvgMatrix(tx: number, ty: number): SvgMatrix {
+  return { a: 1, b: 0, c: 0, d: 1, e: tx, f: ty };
+}
+
+function scaleSvgMatrix(sx: number, sy: number): SvgMatrix {
+  return { a: sx, b: 0, c: 0, d: sy, e: 0, f: 0 };
+}
+
+function rotateSvgMatrix(angleDeg: number, cx = 0, cy = 0): SvgMatrix {
+  const angle = (angleDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return multiplySvgMatrices(
+    multiplySvgMatrices(translateSvgMatrix(cx, cy), { a: cos, b: sin, c: -sin, d: cos, e: 0, f: 0 }),
+    translateSvgMatrix(-cx, -cy)
+  );
+}
+
+function skewXSvgMatrix(angleDeg: number): SvgMatrix {
+  return { a: 1, b: 0, c: Math.tan((angleDeg * Math.PI) / 180), d: 1, e: 0, f: 0 };
+}
+
+function skewYSvgMatrix(angleDeg: number): SvgMatrix {
+  return { a: 1, b: Math.tan((angleDeg * Math.PI) / 180), c: 0, d: 1, e: 0, f: 0 };
+}
+
+function parseSvgTransform(transform: string | null | undefined) {
+  if (!transform?.trim()) {
+    return identityMatrix();
+  }
+
+  const commandRegex = /(matrix|translate|scale|rotate|skewX|skewY)\s*\(([^)]*)\)/gi;
+  let result = identityMatrix();
+
+  for (const match of transform.matchAll(commandRegex)) {
+    const command = match[1];
+    const values = match[2]
+      .trim()
+      .split(/[\s,]+/)
+      .map(Number)
+      .filter((value) => Number.isFinite(value));
+
+    let next = identityMatrix();
+    switch (command) {
+      case "matrix":
+        if (values.length === 6) {
+          next = { a: values[0], b: values[1], c: values[2], d: values[3], e: values[4], f: values[5] };
+        }
+        break;
+      case "translate":
+        next = translateSvgMatrix(values[0] ?? 0, values[1] ?? 0);
+        break;
+      case "scale":
+        next = scaleSvgMatrix(values[0] ?? 1, values[1] ?? values[0] ?? 1);
+        break;
+      case "rotate":
+        next = rotateSvgMatrix(values[0] ?? 0, values[1] ?? 0, values[2] ?? 0);
+        break;
+      case "skewX":
+        next = skewXSvgMatrix(values[0] ?? 0);
+        break;
+      case "skewY":
+        next = skewYSvgMatrix(values[0] ?? 0);
+        break;
+      default:
+        next = identityMatrix();
+        break;
+    }
+
+    result = multiplySvgMatrices(result, next);
+  }
+
+  return result;
+}
+
+function collectSvgNodeTransform(node: SVGElement, root: SVGElement) {
+  const chain: SVGElement[] = [];
+  let current: SVGElement | null = node;
+
+  while (current) {
+    chain.push(current);
+    if (current === root) {
+      break;
+    }
+    current = current.parentElement instanceof SVGElement ? current.parentElement : null;
+  }
+
+  return chain
+    .reverse()
+    .reduce((matrix, element) => multiplySvgMatrices(matrix, parseSvgTransform(element.getAttribute("transform"))), identityMatrix());
+}
+
 function createEntityBounds(points: Array<{ x: number; y: number }>): EntityBounds {
   return {
     minX: Math.min(...points.map((point) => point.x)),
@@ -224,96 +328,6 @@ function createEntityBounds(points: Array<{ x: number; y: number }>): EntityBoun
     maxX: Math.max(...points.map((point) => point.x)),
     maxY: Math.max(...points.map((point) => point.y))
   };
-}
-
-function sampleArcPoints(entity: Extract<GeometryEntity, { kind: "arc" }>, segments = 24) {
-  const points: Array<{ x: number; y: number }> = [];
-  let sweep = entity.endAngle - entity.startAngle;
-  while (sweep <= 0) {
-    sweep += Math.PI * 2;
-  }
-
-  for (let index = 0; index <= segments; index += 1) {
-    const angle = entity.startAngle + sweep * (index / segments);
-    points.push({
-      x: entity.cx + entity.r * Math.cos(angle),
-      y: entity.cy - entity.r * Math.sin(angle)
-    });
-  }
-
-  return points;
-}
-
-function sampleEllipseArcGeometryPoints(
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  rotation: number,
-  startAngle: number,
-  endAngle: number,
-  segments = 72
-) {
-  let sweep = endAngle - startAngle;
-  while (sweep <= 0) {
-    sweep += Math.PI * 2;
-  }
-
-  const points: Array<{ x: number; y: number }> = [];
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-  for (let index = 0; index <= segments; index += 1) {
-    const angle = startAngle + sweep * (index / segments);
-    const localX = rx * Math.cos(angle);
-    const localY = ry * Math.sin(angle);
-    points.push({
-      x: cx + localX * cos - localY * sin,
-      y: cy + localX * sin + localY * cos
-    });
-  }
-  return points;
-}
-
-function sampleEllipseGeometryPoints(
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  rotation = 0,
-  segments = 96
-) {
-  const points: Array<{ x: number; y: number }> = [];
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-  for (let index = 0; index <= segments; index += 1) {
-    const angle = (Math.PI * 2 * index) / segments;
-    const localX = rx * Math.cos(angle);
-    const localY = ry * Math.sin(angle);
-    points.push({
-      x: cx + localX * cos - localY * sin,
-      y: cy + localX * sin + localY * cos
-    });
-  }
-  return points;
-}
-
-function samplePathGeometryPoints(pathData: string, segments = 72) {
-  const probe = createProbeSvg();
-  const path = document.createElementNS(SVG_NS, "path");
-  path.setAttribute("d", pathData);
-  probe.appendChild(path);
-
-  const length = path.getTotalLength();
-  const stepCount = Math.max(segments, Math.min(960, Math.ceil(length / 2.5)));
-  const points: Array<{ x: number; y: number }> = [];
-
-  for (let index = 0; index <= stepCount; index += 1) {
-    const point = path.getPointAtLength((length * index) / stepCount);
-    points.push({ x: point.x, y: point.y });
-  }
-
-  probe.remove();
-  return points;
 }
 
 function boundsFromGeometry(geometry: GeometryEntity): EntityBounds {
@@ -329,7 +343,7 @@ function boundsFromGeometry(geometry: GeometryEntity): EntityBounds {
       };
     case "ellipse":
       return createEntityBounds(
-        sampleEllipseGeometryPoints(
+        sampleEllipsePoints(
           geometry.cx,
           geometry.cy,
           geometry.rx,
@@ -340,16 +354,7 @@ function boundsFromGeometry(geometry: GeometryEntity): EntityBounds {
       );
     case "ellipseArc":
       return createEntityBounds(
-        sampleEllipseArcGeometryPoints(
-          geometry.cx,
-          geometry.cy,
-          geometry.rx,
-          geometry.ry,
-          geometry.rotation,
-          geometry.startAngle,
-          geometry.endAngle,
-          48
-        )
+        sampleEllipseArcPoints(geometry, 48)
       );
     case "arc":
       return createEntityBounds(sampleArcPoints(geometry));
@@ -376,6 +381,263 @@ function boundsFromGeometry(geometry: GeometryEntity): EntityBounds {
   }
 }
 
+function createGeometryItem(geometry: GeometryEntity, partial = false): DxfGeometryItem {
+  return {
+    geometry,
+    partial,
+    bounds: boundsFromGeometry(geometry),
+    endpoints: endpointsFromGeometry(geometry)
+  };
+}
+
+function geometrySignature(geometry: GeometryEntity) {
+  switch (geometry.kind) {
+    case "polyline":
+      return [
+        "polyline",
+        geometry.closed ? "closed" : "open",
+        geometry.points.map((point) => `${point.x.toFixed(3)},${point.y.toFixed(3)}`).join("|")
+      ].join("::");
+    case "circle":
+      return `circle::${geometry.cx.toFixed(3)}::${geometry.cy.toFixed(3)}::${geometry.r.toFixed(3)}`;
+    case "ellipse":
+      return `ellipse::${geometry.cx.toFixed(3)}::${geometry.cy.toFixed(3)}::${geometry.rx.toFixed(3)}::${geometry.ry.toFixed(3)}::${geometry.rotation.toFixed(6)}`;
+    case "ellipseArc":
+      return `ellipseArc::${geometry.cx.toFixed(3)}::${geometry.cy.toFixed(3)}::${geometry.rx.toFixed(3)}::${geometry.ry.toFixed(3)}::${geometry.rotation.toFixed(6)}::${geometry.startAngle.toFixed(6)}::${geometry.endAngle.toFixed(6)}`;
+    case "arc":
+      return `arc::${geometry.cx.toFixed(3)}::${geometry.cy.toFixed(3)}::${geometry.r.toFixed(3)}::${geometry.startAngle.toFixed(6)}::${geometry.endAngle.toFixed(6)}`;
+    case "path":
+      return `path::${geometry.closed ? "closed" : "open"}::${geometry.d}`;
+    default:
+      return JSON.stringify(geometry);
+  }
+}
+
+function isDegenerateGeometry(geometry: GeometryEntity) {
+  if (geometry.kind === "polyline") {
+    if (geometry.points.length < (geometry.closed ? 3 : 2)) {
+      return true;
+    }
+
+    const bounds = boundsFromGeometry(geometry);
+    if (Math.abs(bounds.maxX - bounds.minX) < 0.001 && Math.abs(bounds.maxY - bounds.minY) < 0.001) {
+      return true;
+    }
+
+    if (geometry.closed) {
+      let area = 0;
+      for (let index = 0; index < geometry.points.length; index += 1) {
+        const current = geometry.points[index];
+        const next = geometry.points[(index + 1) % geometry.points.length];
+        area += current.x * next.y - next.x * current.y;
+      }
+      return Math.abs(area / 2) < 0.05;
+    }
+
+    let length = 0;
+    for (let index = 0; index < geometry.points.length - 1; index += 1) {
+      const start = geometry.points[index];
+      const end = geometry.points[index + 1];
+      length += Math.hypot(end.x - start.x, end.y - start.y);
+    }
+    return length < 0.25;
+  }
+
+  if (geometry.kind === "circle") {
+    return geometry.r <= 0.1;
+  }
+
+  if (geometry.kind === "ellipse" || geometry.kind === "ellipseArc") {
+    return geometry.rx <= 0.1 || geometry.ry <= 0.1;
+  }
+
+  if (geometry.kind === "arc") {
+    return geometry.r <= 0.1;
+  }
+
+  return false;
+}
+
+function pointsNearEqual(
+  left: Array<{ x: number; y: number }>,
+  right: Array<{ x: number; y: number }>,
+  tolerance = 0.12
+) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((point, index) => {
+    const candidate = right[index];
+    return Math.abs(point.x - candidate.x) <= tolerance && Math.abs(point.y - candidate.y) <= tolerance;
+  });
+}
+
+function reversePoints<T>(points: T[]) {
+  return points.slice().reverse();
+}
+
+function areGeometriesNearEqual(left: GeometryEntity, right: GeometryEntity, tolerance = 0.12) {
+  if (left.kind !== right.kind) {
+    return false;
+  }
+
+  if (left.kind === "polyline" && right.kind === "polyline") {
+    if (left.closed !== right.closed) {
+      return false;
+    }
+
+    return (
+      pointsNearEqual(left.points, right.points, tolerance) ||
+      pointsNearEqual(left.points, reversePoints(right.points), tolerance)
+    );
+  }
+
+  if (left.kind === "circle" && right.kind === "circle") {
+    return (
+      Math.abs(left.cx - right.cx) <= tolerance &&
+      Math.abs(left.cy - right.cy) <= tolerance &&
+      Math.abs(left.r - right.r) <= tolerance
+    );
+  }
+
+  if (left.kind === "ellipse" && right.kind === "ellipse") {
+    return (
+      Math.abs(left.cx - right.cx) <= tolerance &&
+      Math.abs(left.cy - right.cy) <= tolerance &&
+      Math.abs(left.rx - right.rx) <= tolerance &&
+      Math.abs(left.ry - right.ry) <= tolerance &&
+      Math.abs(left.rotation - right.rotation) <= 0.01
+    );
+  }
+
+  if (left.kind === "ellipseArc" && right.kind === "ellipseArc") {
+    return (
+      Math.abs(left.cx - right.cx) <= tolerance &&
+      Math.abs(left.cy - right.cy) <= tolerance &&
+      Math.abs(left.rx - right.rx) <= tolerance &&
+      Math.abs(left.ry - right.ry) <= tolerance &&
+      Math.abs(left.rotation - right.rotation) <= 0.01 &&
+      Math.abs(left.startAngle - right.startAngle) <= 0.01 &&
+      Math.abs(left.endAngle - right.endAngle) <= 0.01
+    );
+  }
+
+  if (left.kind === "arc" && right.kind === "arc") {
+    return (
+      Math.abs(left.cx - right.cx) <= tolerance &&
+      Math.abs(left.cy - right.cy) <= tolerance &&
+      Math.abs(left.r - right.r) <= tolerance &&
+      Math.abs(left.startAngle - right.startAngle) <= 0.01 &&
+      Math.abs(left.endAngle - right.endAngle) <= 0.01
+    );
+  }
+
+  if (left.kind === "path" && right.kind === "path") {
+    return left.closed === right.closed && left.d === right.d;
+  }
+
+  return false;
+}
+
+function dedupeGeometryEntities(entities: GeometryEntity[]) {
+  const seen = new Set<string>();
+  const deduped: GeometryEntity[] = [];
+
+  entities.forEach((entity) => {
+    if (isDegenerateGeometry(entity)) {
+      return;
+    }
+
+    const signature = geometrySignature(entity);
+    if (seen.has(signature)) {
+      return;
+    }
+
+    if (deduped.some((candidate) => areGeometriesNearEqual(candidate, entity))) {
+      return;
+    }
+
+    seen.add(signature);
+    deduped.push(entity);
+  });
+
+  return deduped;
+}
+
+function transformSvgImportEntity(entity: GeometryEntity, matrix: SvgMatrix) {
+  switch (entity.kind) {
+    case "polyline":
+      return {
+        kind: "polyline" as const,
+        closed: entity.closed,
+        points: entity.points.map((point) => applySvgMatrix(matrix, point))
+      };
+    case "circle":
+      return {
+        kind: "polyline" as const,
+        closed: true,
+        points: sampleEllipsePoints(entity.cx, entity.cy, entity.r, entity.r, 0, 64).map((point) => applySvgMatrix(matrix, point))
+      };
+    case "ellipse":
+      return {
+        kind: "polyline" as const,
+        closed: true,
+        points: sampleEllipsePoints(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation, 64).map((point) =>
+          applySvgMatrix(matrix, point)
+        )
+      };
+    case "ellipseArc":
+      return {
+        kind: "polyline" as const,
+        closed: false,
+        points: sampleEllipseArcPoints(entity, 64).map((point) => applySvgMatrix(matrix, point))
+      };
+    case "arc":
+      return {
+        kind: "polyline" as const,
+        closed: false,
+        points: sampleArcPoints(entity, 48).map((point) => applySvgMatrix(matrix, point))
+      };
+    case "path":
+      return {
+        kind: "polyline" as const,
+        closed: entity.closed,
+        points: samplePathPoints(entity.d, {
+          closed: entity.closed,
+          minSegments: entity.closed ? 48 : 24,
+          maxSegments: 960,
+          segmentLength: 2.5
+        }).map((point) => applySvgMatrix(matrix, point))
+      };
+    default:
+      return entity;
+  }
+}
+
+function svgNodeToGeometryItems(node: SVGGraphicsElement) {
+  const svgRoot = node.ownerSVGElement ?? node;
+  const transform = collectSvgNodeTransform(node, svgRoot);
+  const entities = entitiesFromSvgElement(node);
+  return entities.flatMap((entity) => {
+    const sourceEntities =
+      entity.kind === "path"
+        ? splitCompoundPathData(entity.d).map((subpath) => ({
+            kind: "path" as const,
+            d: subpath,
+            closed: /z/i.test(subpath)
+          }))
+        : [entity];
+
+    return sourceEntities.map((sourceEntity) => {
+      const transformed = transformSvgImportEntity(sourceEntity, transform);
+      return createGeometryItem(
+        transformed.kind === "polyline" ? normalizePolylineEntity(transformed) : transformed
+      );
+    });
+  });
+}
+
 function endpointsFromGeometry(
   geometry: GeometryEntity
 ): { start: { x: number; y: number } | null; end: { x: number; y: number } | null } {
@@ -394,16 +656,7 @@ function endpointsFromGeometry(
   }
 
   if (geometry.kind === "ellipseArc") {
-    const points = sampleEllipseArcGeometryPoints(
-      geometry.cx,
-      geometry.cy,
-      geometry.rx,
-      geometry.ry,
-      geometry.rotation,
-      geometry.startAngle,
-      geometry.endAngle,
-      2
-    );
+    const points = sampleEllipseArcPoints(geometry, 2);
     return {
       start: points[0] ?? null,
       end: points[points.length - 1] ?? null
@@ -419,6 +672,10 @@ function distance(a: { x: number; y: number } | null, b: { x: number; y: number 
   }
 
   return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function samePoint(a: { x: number; y: number } | null, b: { x: number; y: number } | null, tolerance = GROUP_TOLERANCE) {
+  return distance(a, b) <= tolerance;
 }
 
 function boundsOverlap(a: EntityBounds, b: EntityBounds, tolerance = GROUP_TOLERANCE) {
@@ -439,12 +696,29 @@ function boundsContain(container: EntityBounds, target: EntityBounds, tolerance 
   );
 }
 
-function areItemsConnected(a: DxfGeometryItem, b: DxfGeometryItem) {
-  if (boundsContain(a.bounds, b.bounds) || boundsContain(b.bounds, a.bounds)) {
-    return true;
+function boundsStrictOverlap(a: EntityBounds, b: EntityBounds, tolerance = 0.001) {
+  return !(
+    a.maxX <= b.minX + tolerance ||
+    a.minX >= b.maxX - tolerance ||
+    a.maxY <= b.minY + tolerance ||
+    a.minY >= b.maxY - tolerance
+  );
+}
+
+function geometryHasLooseEndpoints(geometry: GeometryEntity) {
+  if (geometry.kind === "polyline") {
+    return !geometry.closed;
   }
 
-  if (boundsOverlap(a.bounds, b.bounds)) {
+  if (geometry.kind === "path") {
+    return !geometry.closed;
+  }
+
+  return geometry.kind === "arc" || geometry.kind === "ellipseArc";
+}
+
+function areItemsConnected(a: DxfGeometryItem, b: DxfGeometryItem) {
+  if (boundsContain(a.bounds, b.bounds, 0.05) || boundsContain(b.bounds, a.bounds, 0.05)) {
     return true;
   }
 
@@ -455,7 +729,106 @@ function areItemsConnected(a: DxfGeometryItem, b: DxfGeometryItem) {
     distance(a.endpoints.end, b.endpoints.end)
   ];
 
-  return endpointDistances.some((value) => value <= GROUP_TOLERANCE);
+  if (
+    (geometryHasLooseEndpoints(a.geometry) || geometryHasLooseEndpoints(b.geometry)) &&
+    endpointDistances.some((value) => value <= GROUP_TOLERANCE)
+  ) {
+    return true;
+  }
+
+  return boundsStrictOverlap(a.bounds, b.bounds);
+}
+
+function reversePolyline(entity: Extract<GeometryEntity, { kind: "polyline" }>) {
+  return {
+    ...entity,
+    points: entity.points.slice().reverse()
+  };
+}
+
+export function mergeConnectedPolylines(entities: GeometryEntity[]) {
+  const polylines = entities
+    .filter((entity): entity is Extract<GeometryEntity, { kind: "polyline" }> => entity.kind === "polyline")
+    .map((entity) => normalizePolylineEntity(entity));
+  const closed = polylines.filter((entity) => entity.closed);
+  const open = polylines.filter((entity) => !entity.closed && entity.points.length >= 2);
+  const others = entities.filter((entity) => entity.kind !== "polyline");
+  const merged: Extract<GeometryEntity, { kind: "polyline" }>[] = [];
+  const consumed = new Set<number>();
+
+  for (let index = 0; index < open.length; index += 1) {
+    if (consumed.has(index)) {
+      continue;
+    }
+
+    let current = open[index];
+    consumed.add(index);
+    let expanded = true;
+
+    while (expanded) {
+      expanded = false;
+
+      for (let candidateIndex = 0; candidateIndex < open.length; candidateIndex += 1) {
+        if (consumed.has(candidateIndex)) {
+          continue;
+        }
+
+        const candidate = open[candidateIndex];
+        const currentStart = current.points[0] ?? null;
+        const currentEnd = current.points[current.points.length - 1] ?? null;
+        const candidateStart = candidate.points[0] ?? null;
+        const candidateEnd = candidate.points[candidate.points.length - 1] ?? null;
+
+        if (samePoint(currentEnd, candidateStart)) {
+          current = normalizePolylineEntity({
+            kind: "polyline",
+            closed: false,
+            points: current.points.concat(candidate.points.slice(1))
+          });
+        } else if (samePoint(currentEnd, candidateEnd)) {
+          const reversed = reversePolyline(candidate);
+          current = normalizePolylineEntity({
+            kind: "polyline",
+            closed: false,
+            points: current.points.concat(reversed.points.slice(1))
+          });
+        } else if (samePoint(currentStart, candidateEnd)) {
+          current = normalizePolylineEntity({
+            kind: "polyline",
+            closed: false,
+            points: candidate.points.concat(current.points.slice(1))
+          });
+        } else if (samePoint(currentStart, candidateStart)) {
+          const reversed = reversePolyline(candidate);
+          current = normalizePolylineEntity({
+            kind: "polyline",
+            closed: false,
+            points: reversed.points.concat(current.points.slice(1))
+          });
+        } else {
+          continue;
+        }
+
+        consumed.add(candidateIndex);
+        expanded = true;
+        break;
+      }
+    }
+
+    const start = current.points[0] ?? null;
+    const end = current.points[current.points.length - 1] ?? null;
+    if (samePoint(start, end)) {
+      current = normalizePolylineEntity({
+        kind: "polyline",
+        closed: true,
+        points: current.points
+      });
+    }
+
+    merged.push(current);
+  }
+
+  return [...closed, ...merged, ...others];
 }
 
 function rotatePoint(point: { x: number; y: number }, angleDeg: number) {
@@ -568,14 +941,9 @@ export function transformGeometryEntity(
       };
     }
 
-    const sampled = sampleEllipseGeometryPoints(
-      geometry.cx,
-      geometry.cy,
-      geometry.rx,
-      geometry.ry,
-      geometry.rotation,
-      96
-    ).map((point) => transformPoint(point, position, scaleX, scaleY, rotation));
+    const sampled = sampleEllipsePoints(geometry.cx, geometry.cy, geometry.rx, geometry.ry, geometry.rotation, 96).map(
+      (point) => transformPoint(point, position, scaleX, scaleY, rotation)
+    );
 
     return {
       kind: "polyline",
@@ -599,16 +967,9 @@ export function transformGeometryEntity(
       };
     }
 
-    const sampled = sampleEllipseArcGeometryPoints(
-      geometry.cx,
-      geometry.cy,
-      geometry.rx,
-      geometry.ry,
-      geometry.rotation,
-      geometry.startAngle,
-      geometry.endAngle,
-      96
-    ).map((point) => transformPoint(point, position, scaleX, scaleY, rotation));
+    const sampled = sampleEllipseArcPoints(geometry, 96).map((point) =>
+      transformPoint(point, position, scaleX, scaleY, rotation)
+    );
 
     return {
       kind: "polyline",
@@ -643,9 +1004,12 @@ export function transformGeometryEntity(
   }
 
   if (geometry.kind === "path") {
-    const sampled = samplePathGeometryPoints(geometry.d, geometry.closed ? 96 : 72).map((point) =>
-      transformPoint(point, position, scaleX, scaleY, rotation)
-    );
+    const sampled = samplePathPoints(geometry.d, {
+      closed: geometry.closed,
+      minSegments: geometry.closed ? 96 : 72,
+      maxSegments: 960,
+      segmentLength: 2.5
+    }).map((point) => transformPoint(point, position, scaleX, scaleY, rotation));
     return {
       kind: "polyline",
       points: sampled,
@@ -710,9 +1074,12 @@ export function scaleGeometryEntity(geometry: GeometryEntity, factor: number): G
   if (geometry.kind === "path") {
     return {
       kind: "polyline",
-      points: samplePathGeometryPoints(geometry.d, geometry.closed ? 96 : 72).map((point) =>
-        scalePoint(point, factor)
-      ),
+      points: samplePathPoints(geometry.d, {
+        closed: geometry.closed,
+        minSegments: geometry.closed ? 96 : 72,
+        maxSegments: 960,
+        segmentLength: 2.5
+      }).map((point) => scalePoint(point, factor)),
       closed: geometry.closed
     };
   }
@@ -857,6 +1224,78 @@ function groupDxfGeometryItems(items: DxfGeometryItem[]) {
   }
 
   return groups;
+}
+
+function buildPiecesFromGeometryGroups(
+  groups: DxfGeometryItem[][],
+  sourceFile: string,
+  probe: SVGSVGElement,
+  partialWarnings = false
+) {
+  const pieces: PieceItem[] = [];
+  const groupEntries = groups.map((group) => ({
+    group,
+    entities: dedupeGeometryEntities(mergeConnectedPolylines(group.map((item) => item.geometry)))
+  }));
+  const hasAnyClosedGroup = groupEntries.some((entry) => entry.entities.some(entityFormsClosedPiece));
+
+  groupEntries.forEach(({ group, entities: groupEntities }, idx) => {
+    const groupElement = document.createElementNS(SVG_NS, "g");
+    const warnings: GeometryWarning[] = [];
+
+    if (hasAnyClosedGroup && !groupEntities.some(entityFormsClosedPiece)) {
+      return;
+    }
+
+    groupEntities.forEach((geometry) => {
+      const element = appendSvgElementFromDxfEntity(geometry);
+      if (element) {
+        groupElement.appendChild(element);
+      }
+    });
+
+    if (partialWarnings && group.some((item) => item.partial)) {
+      warnings.push("partial-support");
+    }
+
+    if (!groupEntities.length || !groupElement.childNodes.length) {
+      return;
+    }
+
+    probe.appendChild(groupElement);
+    try {
+      pieces.push(pieceFromSvgElement(groupElement, sourceFile, idx, groupEntities, warnings));
+    } catch {
+      pieces.push(createPiece(sourceFile, idx, ["invalid-shape"]));
+    } finally {
+      groupElement.remove();
+    }
+  });
+
+  return pieces;
+}
+
+export function importSvgText(text: string, sourceFile: string): PieceItem[] {
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(text, "image/svg+xml");
+  const svgRoot = doc.documentElement;
+  const allowed = ["path", "rect", "circle", "ellipse", "polygon", "polyline", "line"];
+  const probe = createProbeSvg();
+  const items: DxfGeometryItem[] = [];
+  const importedRoot = document.importNode(svgRoot, true) as unknown as SVGSVGElement;
+  probe.appendChild(importedRoot);
+
+  try {
+    Array.from(importedRoot.querySelectorAll(allowed.join(","))).forEach((node) => {
+      items.push(...svgNodeToGeometryItems(node as SVGGraphicsElement));
+    });
+  } finally {
+    importedRoot.remove();
+  }
+
+  const pieces = buildPiecesFromGeometryGroups(groupDxfGeometryItems(items), sourceFile, probe);
+  probe.remove();
+  return pieces;
 }
 
 export function dxfEntityToGeometry(entity: Record<string, unknown>): { geometry: GeometryEntity | null; partial: boolean } {
@@ -1043,24 +1482,33 @@ export function importDxfText(text: string, sourceFile: string): PieceItem[] {
       };
     });
 
-  groupDxfGeometryItems(items).forEach((group, idx) => {
+  const groups = groupDxfGeometryItems(items);
+  const groupEntries = groups.map((group) => ({
+    group,
+    entities: dedupeGeometryEntities(mergeConnectedPolylines(group.map((item) => item.geometry)))
+  }));
+  const hasAnyClosedGroup = groupEntries.some((entry) => entry.entities.some(entityFormsClosedPiece));
+
+  groupEntries.forEach(({ group, entities: groupEntities }, idx) => {
     const groupElement = document.createElementNS(SVG_NS, "g");
-    const groupEntities: GeometryEntity[] = [];
     const warnings: GeometryWarning[] = [];
 
-    group.forEach((item) => {
-      const element = appendSvgElementFromDxfEntity(item.geometry);
+    if (hasAnyClosedGroup && !groupEntities.some(entityFormsClosedPiece)) {
+      return;
+    }
+
+    groupEntities.forEach((geometry) => {
+      const element = appendSvgElementFromDxfEntity(geometry);
       if (!element) {
         return;
       }
 
-      if (item.partial) {
-        warnings.push("partial-support");
-      }
-
       groupElement.appendChild(element);
-      groupEntities.push(item.geometry);
     });
+
+    if (group.some((item) => item.partial)) {
+      warnings.push("partial-support");
+    }
 
     if (!groupEntities.length) {
       return;

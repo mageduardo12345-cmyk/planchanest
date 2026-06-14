@@ -1,6 +1,12 @@
 import type { GeometryEntity, GeometryPoint, PieceGeometry } from "../types";
-
-const SVG_NS = "http://www.w3.org/2000/svg";
+import { normalizePolylineEntity, simplifyPolyline } from "./contours";
+import {
+  normalizeArcSweep,
+  sampleArcPoints,
+  sampleEllipseArcPoints,
+  sampleEllipsePoints,
+  samplePathPoints
+} from "./sampling";
 
 function round(n: number) {
   return Math.round(n * 1000) / 1000;
@@ -13,17 +19,6 @@ function shiftPoint(point: GeometryPoint, offsetX: number, offsetY: number): Geo
   };
 }
 
-function createProbeSvg() {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("width", "0");
-  svg.setAttribute("height", "0");
-  svg.style.position = "absolute";
-  svg.style.left = "-9999px";
-  svg.style.top = "-9999px";
-  document.body.appendChild(svg);
-  return svg;
-}
-
 export function getElementBounds(element: SVGGraphicsElement) {
   const box = element.getBBox();
   return {
@@ -33,6 +28,58 @@ export function getElementBounds(element: SVGGraphicsElement) {
     maxY: round(box.y + box.height),
     width: round(box.width),
     height: round(box.height)
+  };
+}
+
+function boundsFromPoints(points: GeometryPoint[]) {
+  return {
+    minX: round(Math.min(...points.map((point) => point.x))),
+    minY: round(Math.min(...points.map((point) => point.y))),
+    maxX: round(Math.max(...points.map((point) => point.x))),
+    maxY: round(Math.max(...points.map((point) => point.y)))
+  };
+}
+
+function getEntityBounds(entity: GeometryEntity) {
+  switch (entity.kind) {
+    case "polyline":
+      return boundsFromPoints(entity.points);
+    case "circle":
+      return {
+        minX: round(entity.cx - entity.r),
+        minY: round(entity.cy - entity.r),
+        maxX: round(entity.cx + entity.r),
+        maxY: round(entity.cy + entity.r)
+      };
+    case "ellipse":
+      return boundsFromPoints(sampleEllipsePoints(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation, 48));
+    case "ellipseArc":
+      return boundsFromPoints(sampleEllipseArcPoints(entity, 48));
+    case "arc":
+      return boundsFromPoints(sampleArcPoints(entity, 48));
+    case "path":
+      return boundsFromPoints(
+        samplePathPoints(entity.d, {
+          offsetX: 0,
+          offsetY: 0,
+          closed: entity.closed,
+          minSegments: entity.closed ? 48 : 24,
+          maxSegments: 720,
+          segmentLength: 2.5
+        })
+      );
+    default:
+      return { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  }
+}
+
+function getBoundsFromEntities(entities: GeometryEntity[]) {
+  const entityBounds = entities.map(getEntityBounds);
+  return {
+    minX: round(Math.min(...entityBounds.map((bounds) => bounds.minX))),
+    minY: round(Math.min(...entityBounds.map((bounds) => bounds.minY))),
+    maxX: round(Math.max(...entityBounds.map((bounds) => bounds.maxX))),
+    maxY: round(Math.max(...entityBounds.map((bounds) => bounds.maxY)))
   };
 }
 
@@ -59,125 +106,64 @@ function parsePointsAttribute(pointsText: string) {
     .map(([x, y]) => ({ x, y }));
 }
 
-function sampleEllipse(cx: number, cy: number, rx: number, ry: number, segments: number) {
-  const points: GeometryPoint[] = [];
-  for (let index = 0; index < segments; index += 1) {
-    const angle = (Math.PI * 2 * index) / segments;
-    points.push({
-      x: cx + rx * Math.cos(angle),
-      y: cy + ry * Math.sin(angle)
-    });
-  }
-  return points;
-}
-
-function sampleRotatedEllipse(
-  cx: number,
-  cy: number,
-  rx: number,
-  ry: number,
-  rotation: number,
-  segments: number
-) {
-  const points: GeometryPoint[] = [];
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-  for (let index = 0; index < segments; index += 1) {
-    const angle = (Math.PI * 2 * index) / segments;
-    const localX = rx * Math.cos(angle);
-    const localY = ry * Math.sin(angle);
-    points.push({
-      x: cx + localX * cos - localY * sin,
-      y: cy + localX * sin + localY * cos
-    });
-  }
-  return points;
-}
-
-function normalizeArcSweep(startAngle: number, endAngle: number) {
-  let sweep = endAngle - startAngle;
-  while (sweep <= 0) {
-    sweep += Math.PI * 2;
-  }
-  return sweep;
-}
-
-function sampleArc(entity: Extract<GeometryEntity, { kind: "arc" }>, segments = 72) {
-  const sweep = normalizeArcSweep(entity.startAngle, entity.endAngle);
-  const points: GeometryPoint[] = [];
-
-  for (let index = 0; index <= segments; index += 1) {
-    const angle = entity.startAngle + sweep * (index / segments);
-    points.push({
-      x: entity.cx + entity.r * Math.cos(angle),
-      y: entity.cy - entity.r * Math.sin(angle)
-    });
-  }
-
-  return points;
-}
-
-function sampleEllipseArc(entity: Extract<GeometryEntity, { kind: "ellipseArc" }>, segments = 72) {
-  let sweep = entity.endAngle - entity.startAngle;
-  while (sweep <= 0) {
-    sweep += Math.PI * 2;
-  }
-
-  const points: GeometryPoint[] = [];
-  const cos = Math.cos(entity.rotation);
-  const sin = Math.sin(entity.rotation);
-
-  for (let index = 0; index <= segments; index += 1) {
-    const angle = entity.startAngle + sweep * (index / segments);
-    const localX = entity.rx * Math.cos(angle);
-    const localY = entity.ry * Math.sin(angle);
-    points.push({
-      x: entity.cx + localX * cos - localY * sin,
-      y: entity.cy + localX * sin + localY * cos
-    });
-  }
-
-  return points;
-}
-
-function samplePath(pathData: string, offsetX: number, offsetY: number, closed: boolean) {
-  const probe = createProbeSvg();
-  const path = document.createElementNS(SVG_NS, "path");
-  path.setAttribute("d", pathData);
-  path.setAttribute("transform", `translate(${-offsetX} ${-offsetY})`);
-  probe.appendChild(path);
-
-  const length = path.getTotalLength();
-  const segments = Math.max(36, Math.min(900, Math.ceil(length / 2.5)));
-  const points: GeometryPoint[] = [];
-
-  for (let index = 0; index <= segments; index += 1) {
-    const point = path.getPointAtLength((length * index) / segments);
-    points.push({ x: point.x, y: point.y });
-  }
-
-  probe.remove();
-  return closed ? points.slice(0, -1) : points;
-}
-
 function pointToken(point: GeometryPoint) {
   return `${round(point.x).toFixed(3)},${round(point.y).toFixed(3)}`;
+}
+
+function pointInPolygon(point: GeometryPoint, polygon: GeometryPoint[]) {
+  const epsilon = 0.000001;
+  const isPointOnSegment = (start: GeometryPoint, end: GeometryPoint) => {
+    const cross = (end.x - start.x) * (point.y - start.y) - (end.y - start.y) * (point.x - start.x);
+    if (Math.abs(cross) > epsilon) {
+      return false;
+    }
+
+    return (
+      point.x >= Math.min(start.x, end.x) - epsilon &&
+      point.x <= Math.max(start.x, end.x) + epsilon &&
+      point.y >= Math.min(start.y, end.y) - epsilon &&
+      point.y <= Math.max(start.y, end.y) + epsilon
+    );
+  };
+
+  let inside = false;
+
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    if (isPointOnSegment(polygon[j], polygon[i])) {
+      return true;
+    }
+
+    const xi = polygon[i].x;
+    const yi = polygon[i].y;
+    const xj = polygon[j].x;
+    const yj = polygon[j].y;
+
+    const intersects =
+      yi > point.y !== yj > point.y &&
+      point.x < ((xj - xi) * (point.y - yi)) / ((yj - yi) || 0.000001) + xi;
+
+    if (intersects) {
+      inside = !inside;
+    }
+  }
+
+  return inside;
 }
 
 function sampleEntitySignaturePoints(entity: GeometryEntity, bounds: PieceGeometry["sourceBounds"]) {
   switch (entity.kind) {
     case "polyline":
-      return entity.points;
+      return simplifyPolyline(entity.points, 0.2, entity.closed);
     case "circle":
-      return sampleEllipse(entity.cx, entity.cy, entity.r, entity.r, 24);
+      return sampleEllipsePoints(entity.cx, entity.cy, entity.r, entity.r, 0, 24);
     case "ellipse":
-      return sampleRotatedEllipse(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation, 24);
+      return sampleEllipsePoints(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation, 24);
     case "ellipseArc":
-      return sampleEllipseArc(entity, 24);
+      return sampleEllipseArcPoints(entity, 24);
     case "arc":
-      return sampleArc(entity, 24);
+      return sampleArcPoints(entity, 24);
     case "path":
-      return samplePath(entity.d, bounds.minX, bounds.minY, entity.closed);
+      return samplePathPoints(entity.d, { offsetX: bounds.minX, offsetY: bounds.minY, closed: entity.closed, minSegments: 36, maxSegments: 900, segmentLength: 2.5 });
     default:
       return [];
   }
@@ -191,6 +177,74 @@ function polygonArea(points: GeometryPoint[]) {
     area += current.x * next.y - next.x * current.y;
   }
   return Math.abs(area / 2);
+}
+
+type SampledClosedLoop = {
+  points: GeometryPoint[];
+  area: number;
+  isHole: boolean;
+};
+
+function contourRepresentativePoint(points: GeometryPoint[]) {
+  const sum = points.reduce(
+    (acc, point) => ({
+      x: acc.x + point.x,
+      y: acc.y + point.y
+    }),
+    { x: 0, y: 0 }
+  );
+
+  return {
+    x: sum.x / Math.max(points.length, 1),
+    y: sum.y / Math.max(points.length, 1)
+  };
+}
+
+function sampleClosedLoopsFromEntity(entity: GeometryEntity, bounds: PieceGeometry["sourceBounds"]) {
+  if (entity.kind === "polyline" && entity.closed && entity.points.length >= 3) {
+    return [entity.points];
+  }
+
+  if (entity.kind === "circle") {
+    return [sampleEllipsePoints(entity.cx, entity.cy, entity.r, entity.r, 0, 48)];
+  }
+
+  if (entity.kind === "ellipse") {
+    return [sampleEllipsePoints(entity.cx, entity.cy, entity.rx, entity.ry, entity.rotation, 48)];
+  }
+
+  if (entity.kind === "path") {
+    const subpaths = entity.d.match(/[Mm][^Mm]*/g) ?? [];
+    return subpaths
+      .filter((subpath) => /z/i.test(subpath))
+      .map((subpath) => samplePathPoints(subpath, { offsetX: bounds.minX, offsetY: bounds.minY, closed: true, minSegments: 36, maxSegments: 900, segmentLength: 2.5 }))
+      .filter((points) => points.length >= 3);
+  }
+
+  return [];
+}
+
+function classifyClosedLoops(entities: GeometryEntity[], bounds: PieceGeometry["sourceBounds"]) {
+  const loops = entities
+    .flatMap((entity) => sampleClosedLoopsFromEntity(entity, bounds))
+    .filter((points) => points.length >= 3)
+    .map((points) => ({ points, area: polygonArea(points), isHole: false satisfies boolean }));
+
+  return loops.map((loop) => {
+    const representative = contourRepresentativePoint(loop.points);
+    const depth = loops.reduce((count, candidate) => {
+      if (candidate === loop || candidate.area <= loop.area) {
+        return count;
+      }
+
+      return pointInPolygon(representative, candidate.points) ? count + 1 : count;
+    }, 0);
+
+    return {
+      ...loop,
+      isHole: depth % 2 === 1
+    } satisfies SampledClosedLoop;
+  });
 }
 
 function approximateEntityArea(entity: GeometryEntity, bounds: PieceGeometry["sourceBounds"]) {
@@ -212,7 +266,7 @@ function approximateEntityArea(entity: GeometryEntity, bounds: PieceGeometry["so
           return sum;
         }
 
-        const points = samplePath(subpath, bounds.minX, bounds.minY, true);
+        const points = samplePathPoints(subpath, { offsetX: bounds.minX, offsetY: bounds.minY, closed: true, minSegments: 36, maxSegments: 900, segmentLength: 2.5 });
         return points.length >= 3 ? sum + polygonArea(points) : sum;
       }, 0);
     }
@@ -277,6 +331,25 @@ export function entitiesFromSvgElement(element: Element): GeometryEntity[] {
     ];
   }
 
+  if (tag === "line") {
+    return [
+      {
+        kind: "polyline",
+        closed: false,
+        points: [
+          {
+            x: Number(element.getAttribute("x1") ?? 0),
+            y: Number(element.getAttribute("y1") ?? 0)
+          },
+          {
+            x: Number(element.getAttribute("x2") ?? 0),
+            y: Number(element.getAttribute("y2") ?? 0)
+          }
+        ]
+      }
+    ];
+  }
+
   if (tag === "path") {
     const d = element.getAttribute("d") ?? "";
     return [{ kind: "path", d, closed: /z/i.test(d) }];
@@ -288,10 +361,10 @@ export function entitiesFromSvgElement(element: Element): GeometryEntity[] {
 function normalizeEntity(entity: GeometryEntity, offsetX: number, offsetY: number): GeometryEntity {
   switch (entity.kind) {
     case "polyline":
-      return {
+      return normalizePolylineEntity({
         ...entity,
         points: entity.points.map((point) => shiftPoint(point, offsetX, offsetY))
-      };
+      });
     case "circle":
       return {
         ...entity,
@@ -363,14 +436,25 @@ export function buildPieceGeometry(
   element: SVGGraphicsElement,
   sourceEntities?: GeometryEntity[]
 ): PieceGeometry {
-  const bounds = getElementBounds(element);
-  const markup = new XMLSerializer().serializeToString(element);
   const tag = element.tagName.toLowerCase();
   const rawEntities = sourceEntities?.length ? sourceEntities : entitiesFromSvgElement(element);
+  const sourceBounds = rawEntities.length
+    ? getBoundsFromEntities(rawEntities)
+    : getElementBounds(element);
+  const bounds = {
+    ...sourceBounds,
+    width: round(sourceBounds.maxX - sourceBounds.minX),
+    height: round(sourceBounds.maxY - sourceBounds.minY)
+  };
+  const markup = new XMLSerializer().serializeToString(element);
   const closed =
     rawEntities.length > 0
       ? rawEntities.every((entity) =>
-          entity.kind === "path" ? entity.closed : entity.kind !== "arc" && entity.kind !== "ellipseArc"
+          entity.kind === "path"
+            ? entity.closed
+            : entity.kind === "polyline"
+              ? entity.closed
+              : entity.kind !== "arc" && entity.kind !== "ellipseArc"
         )
       : isClosedShape(element);
   const hasCurves =
@@ -386,10 +470,14 @@ export function buildPieceGeometry(
       : tag === "circle" ||
         tag === "ellipse" ||
         (tag === "path" && /[CQASTcqast]/.test(element.getAttribute("d") ?? ""));
-  const approxArea = rawEntities.reduce(
-    (sum, entity) => sum + approximateEntityArea(entity, bounds),
+  const classifiedLoops = classifyClosedLoops(rawEntities, bounds);
+  const approxAreaFromLoops = classifiedLoops.reduce(
+    (sum, loop) => sum + loop.area * (loop.isHole ? -1 : 1),
     0
   );
+  const approxArea =
+    approxAreaFromLoops ||
+    rawEntities.reduce((sum, entity) => sum + approximateEntityArea(entity, bounds), 0);
 
   return {
     svgMarkup: markup,
@@ -404,10 +492,7 @@ export function buildPieceGeometry(
     },
     closed,
     hasCurves,
-    hasHoles:
-      rawEntities.filter((entity) => entity.kind === "circle" || entity.kind === "ellipse").length > 1 ||
-      rawEntities.filter((entity) => entity.kind === "polyline" && entity.closed).length > 1 ||
-      (tag === "path" && ((element.getAttribute("d") ?? "").match(/z/gi)?.length ?? 0) > 1),
+    hasHoles: classifiedLoops.some((loop) => loop.isHole),
     entities: rawEntities.map((entity) => normalizeEntity(entity, bounds.minX, bounds.minY))
   };
 }

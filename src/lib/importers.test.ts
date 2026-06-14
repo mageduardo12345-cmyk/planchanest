@@ -3,7 +3,11 @@ import {
   dxfEntityToGeometry,
   flattenDxfEntities,
   getDxfUnitScaleFactor,
+  importDxfText,
+  importSvgText,
+  mergeConnectedPolylines,
   scaleGeometryEntity,
+  splitCompoundPathData,
   transformGeometryEntity
 } from "./importers";
 
@@ -11,6 +15,7 @@ function installSimplePathMetrics() {
   const prototype = SVGElement.prototype as SVGElement & {
     getTotalLength?: () => number;
     getPointAtLength?: (distance: number) => DOMPoint;
+    getBBox?: () => DOMRect;
   };
 
   prototype.getTotalLength = function getTotalLength() {
@@ -59,6 +64,52 @@ function installSimplePathMetrics() {
 
     const last = segments[segments.length - 1];
     return { x: last?.x2 ?? 0, y: last?.y2 ?? 0 } as DOMPoint;
+  };
+
+  prototype.getBBox = function getBBox() {
+    const tag = this.tagName.toLowerCase();
+
+    if (tag === "circle") {
+      const cx = Number(this.getAttribute("cx") ?? 0);
+      const cy = Number(this.getAttribute("cy") ?? 0);
+      const r = Number(this.getAttribute("r") ?? 0);
+      return { x: cx - r, y: cy - r, width: r * 2, height: r * 2 } as DOMRect;
+    }
+
+    if (tag === "ellipse") {
+      const cx = Number(this.getAttribute("cx") ?? 0);
+      const cy = Number(this.getAttribute("cy") ?? 0);
+      const rx = Number(this.getAttribute("rx") ?? 0);
+      const ry = Number(this.getAttribute("ry") ?? 0);
+      return { x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2 } as DOMRect;
+    }
+
+    if (tag === "polyline" || tag === "polygon") {
+      const points = (this.getAttribute("points") ?? "")
+        .trim()
+        .split(/\s+/)
+        .map((pair) => pair.split(",").map(Number))
+        .filter((pair) => pair.length === 2 && pair.every((value) => Number.isFinite(value)));
+      const xs = points.map(([x]) => x);
+      const ys = points.map(([, y]) => y);
+      return {
+        x: Math.min(...xs),
+        y: Math.min(...ys),
+        width: Math.max(...xs) - Math.min(...xs),
+        height: Math.max(...ys) - Math.min(...ys)
+      } as DOMRect;
+    }
+
+    const d = this.getAttribute("d") ?? "";
+    const values = d.match(/-?\d+(\.\d+)?/g)?.map(Number) ?? [0, 0];
+    const xs = values.filter((_, index) => index % 2 === 0);
+    const ys = values.filter((_, index) => index % 2 === 1);
+    return {
+      x: Math.min(...xs),
+      y: Math.min(...ys),
+      width: Math.max(...xs) - Math.min(...xs),
+      height: Math.max(...ys) - Math.min(...ys)
+    } as DOMRect;
   };
 }
 
@@ -217,5 +268,260 @@ describe("DXF import helpers", () => {
     expect(result.geometry.ry).toBeCloseTo(5, 6);
     expect(result.geometry.startAngle).toBeCloseTo(0, 6);
     expect(result.geometry.endAngle).toBeCloseTo(Math.PI / 2, 6);
+  });
+
+  it("merges connected open polylines into a single closed contour", () => {
+    const merged = mergeConnectedPolylines([
+      {
+        kind: "polyline",
+        closed: false,
+        points: [
+          { x: 0, y: 0 },
+          { x: 10, y: 0 }
+        ]
+      },
+      {
+        kind: "polyline",
+        closed: false,
+        points: [
+          { x: 10, y: 0 },
+          { x: 10, y: 10 }
+        ]
+      },
+      {
+        kind: "polyline",
+        closed: false,
+        points: [
+          { x: 10, y: 10 },
+          { x: 0, y: 10 }
+        ]
+      },
+      {
+        kind: "polyline",
+        closed: false,
+        points: [
+          { x: 0, y: 10 },
+          { x: 0, y: 0 }
+        ]
+      }
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0].kind).toBe("polyline");
+    if (merged[0].kind !== "polyline") {
+      throw new Error("Expected merged polyline");
+    }
+
+    expect(merged[0].closed).toBe(true);
+    expect(merged[0].points).toEqual([
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 }
+    ]);
+  });
+
+  it("splits compound SVG paths into separate subpaths", () => {
+    expect(splitCompoundPathData("M 0 0 L 10 0 L 10 10 Z M 20 20 L 30 20 L 30 30 Z")).toEqual([
+      "M 0 0 L 10 0 L 10 10 Z",
+      "M 20 20 L 30 20 L 30 30 Z"
+    ]);
+  });
+
+  it("imports compound SVG paths as multiple detected pieces when subpaths are separate", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<path d='M 0 0 L 10 0 L 10 10 L 0 10 Z M 30 0 L 40 0 L 40 10 L 30 10 Z' />",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "compound.svg");
+
+    expect(pieces).toHaveLength(2);
+    expect(pieces.every((piece) => piece.geometry.closed)).toBe(true);
+  });
+
+  it("keeps separate SVG pieces apart when they are positioned by parent group transforms", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<g transform='translate(0 0)'><rect x='0' y='0' width='10' height='10' /></g>",
+      "<g transform='translate(40 0)'><rect x='0' y='0' width='10' height='10' /></g>",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "group-transform.svg");
+
+    expect(pieces).toHaveLength(2);
+    expect(pieces[0].geometry.width).toBeCloseTo(10, 3);
+    expect(pieces[1].geometry.width).toBeCloseTo(10, 3);
+  });
+
+  it("does not merge nearby SVG pieces that are close but still separated", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<rect x='0' y='0' width='10' height='10' />",
+      "<rect x='10.2' y='0' width='10' height='10' />",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "nearby-separated.svg");
+
+    expect(pieces).toHaveLength(2);
+  });
+
+  it("keeps nested SVG contours together when they form a piece with a hole", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<rect x='0' y='0' width='40' height='40' />",
+      "<rect x='10' y='10' width='20' height='20' />",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "hole-piece.svg");
+
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0].geometry.hasHoles).toBe(true);
+  });
+
+  it("imports rotated SVG geometry from transform attributes as usable closed pieces", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<g transform='translate(20 20) rotate(45)'>",
+      "<rect x='0' y='0' width='20' height='10' />",
+      "</g>",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "rotated-group.svg");
+
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0].geometry.closed).toBe(true);
+    expect(pieces[0].geometry.width).toBeGreaterThan(20);
+    expect(pieces[0].geometry.height).toBeGreaterThan(10);
+  });
+
+  it("removes duplicated overlapping SVG contours inside the same imported piece", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<rect x='0' y='0' width='20' height='20' />",
+      "<rect x='0' y='0' width='20' height='20' />",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "duplicate-rect.svg");
+
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0].geometry.entities).toHaveLength(1);
+    expect(pieces[0].geometry.width).toBeCloseTo(20, 3);
+    expect(pieces[0].geometry.height).toBeCloseTo(20, 3);
+  });
+
+  it("removes nearly duplicated SVG contours created by small coordinate drift", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<rect x='0' y='0' width='20' height='20' />",
+      "<polygon points='0.04,0.03 20.02,0.02 20.01,20.04 0.03,20.01' />",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "near-duplicate.svg");
+
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0].geometry.entities).toHaveLength(1);
+  });
+
+  it("drops tiny closed SVG contours that are effectively noise", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<rect x='0' y='0' width='20' height='20' />",
+      "<rect x='50' y='50' width='0.05' height='0.05' />",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "tiny-noise.svg");
+
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0].geometry.width).toBeCloseTo(20, 3);
+    expect(pieces[0].geometry.height).toBeCloseTo(20, 3);
+  });
+
+  it("supports SVG line elements as open helper geometry when no closed shapes exist", () => {
+    const svg = [
+      "<svg xmlns='http://www.w3.org/2000/svg'>",
+      "<line x1='0' y1='0' x2='40' y2='0' />",
+      "<line x1='40' y1='0' x2='40' y2='20' />",
+      "</svg>"
+    ].join("");
+
+    const pieces = importSvgText(svg, "lines-only.svg");
+
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0].geometry.entities.length).toBeGreaterThan(0);
+    expect(pieces[0].geometry.closed).toBe(false);
+  });
+
+  it("ignores open helper geometry when importing DXF pieces", () => {
+    const dxf = [
+      "0",
+      "SECTION",
+      "2",
+      "HEADER",
+      "9",
+      "$INSUNITS",
+      "70",
+      "4",
+      "0",
+      "ENDSEC",
+      "0",
+      "SECTION",
+      "2",
+      "ENTITIES",
+      "0",
+      "LINE",
+      "8",
+      "0",
+      "10",
+      "0",
+      "20",
+      "0",
+      "11",
+      "50",
+      "21",
+      "0",
+      "0",
+      "LWPOLYLINE",
+      "8",
+      "0",
+      "90",
+      "4",
+      "70",
+      "1",
+      "10",
+      "100",
+      "20",
+      "100",
+      "10",
+      "130",
+      "20",
+      "100",
+      "10",
+      "130",
+      "20",
+      "130",
+      "10",
+      "100",
+      "20",
+      "130",
+      "0",
+      "ENDSEC",
+      "0",
+      "EOF"
+    ].join("\n");
+
+    const pieces = importDxfText(dxf, "helpers.dxf");
+    expect(pieces).toHaveLength(1);
+    expect(pieces[0].geometry.closed).toBe(true);
+    expect(pieces[0].geometry.width).toBeCloseTo(30, 3);
+    expect(pieces[0].geometry.height).toBeCloseTo(30, 3);
   });
 });

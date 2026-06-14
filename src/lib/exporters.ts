@@ -6,7 +6,15 @@ import type {
   NestingResult,
   PieceItem
 } from "../types";
-import { normalizeSvgMarkup } from "./geometry";
+import { removeCollinearPoints } from "./contours";
+import {
+  dedupeClosingPoint as dedupeClosingPointShared,
+  normalizeArcSweep,
+  sampleArcPoints,
+  sampleEllipseArcPoints,
+  sampleEllipsePoints,
+  samplePathPoints
+} from "./sampling";
 
 type Matrix = {
   a: number;
@@ -17,9 +25,7 @@ type Matrix = {
   f: number;
 };
 
-const SVG_NS = "http://www.w3.org/2000/svg";
 let jsPdfModulePromise: Promise<typeof import("jspdf")> | null = null;
-let svg2PdfModulePromise: Promise<{ svg2pdf: (element: Element, pdf: jsPDF, options?: Record<string, unknown>) => Promise<void> }> | null = null;
 
 type DxfHandleState = {
   current: number;
@@ -30,9 +36,18 @@ type DxfExportContour = {
   closed: boolean;
 };
 
+type LineSegment = {
+  start: GeometryPoint;
+  end: GeometryPoint;
+};
+
+const EXPORT_POINT_TOLERANCE = 0.001;
+
 type SimplePathSegment =
   | { kind: "move"; point: GeometryPoint }
   | { kind: "line"; point: GeometryPoint }
+  | { kind: "quadratic"; control: GeometryPoint; point: GeometryPoint }
+  | { kind: "cubic"; control1: GeometryPoint; control2: GeometryPoint; point: GeometryPoint }
   | {
       kind: "arc";
       rx: number;
@@ -43,6 +58,14 @@ type SimplePathSegment =
       point: GeometryPoint;
     }
   | { kind: "close" };
+
+type SimplePathCommand =
+  | "move"
+  | "line"
+  | "quadratic"
+  | "cubic"
+  | "arc"
+  | "close";
 
 function findPiece(pieces: PieceItem[], pieceId: string) {
   return pieces.find((piece) => piece.id === pieceId);
@@ -112,86 +135,233 @@ function createDownload(name: string, contents: BlobPart, mimeType: string) {
   URL.revokeObjectURL(url);
 }
 
-function createProbeSvg() {
-  const svg = document.createElementNS(SVG_NS, "svg");
-  svg.setAttribute("width", "0");
-  svg.setAttribute("height", "0");
-  svg.style.position = "absolute";
-  svg.style.left = "-9999px";
-  svg.style.top = "-9999px";
-  document.body.appendChild(svg);
-  return svg;
+function dedupeClosingPoint(points: GeometryPoint[]) {
+  return dedupeClosingPointShared(points);
 }
 
-function transformSvgPoint(matrix: DOMMatrix | null, point: GeometryPoint) {
-  if (!matrix) {
-    return point;
+function pointKey(point: GeometryPoint) {
+  return `${point.x.toFixed(3)},${point.y.toFixed(3)}`;
+}
+
+function segmentKey(start: GeometryPoint, end: GeometryPoint) {
+  const a = pointKey(start);
+  const b = pointKey(end);
+  return a < b ? `${a}|${b}` : `${b}|${a}`;
+}
+
+function contoursToSegments(contours: DxfExportContour[]) {
+  const segments: LineSegment[] = [];
+
+  contours.forEach((contour) => {
+    for (let index = 0; index < contour.points.length - 1; index += 1) {
+      const start = contour.points[index];
+      const end = contour.points[index + 1];
+      if (Math.abs(start.x - end.x) < 0.001 && Math.abs(start.y - end.y) < 0.001) {
+        continue;
+      }
+      segments.push({ start, end });
+    }
+
+    if (contour.closed && contour.points.length > 2) {
+      const start = contour.points[contour.points.length - 1];
+      const end = contour.points[0];
+      if (Math.abs(start.x - end.x) >= 0.001 || Math.abs(start.y - end.y) >= 0.001) {
+        segments.push({ start, end });
+      }
+    }
+  });
+
+  return segments;
+}
+
+function buildAdjacency(segments: LineSegment[]) {
+  const adjacency = new Map<string, LineSegment[]>();
+
+  segments.forEach((segment) => {
+    const startKey = pointKey(segment.start);
+    const endKey = pointKey(segment.end);
+    const startBucket = adjacency.get(startKey) ?? [];
+    startBucket.push(segment);
+    adjacency.set(startKey, startBucket);
+    const endBucket = adjacency.get(endKey) ?? [];
+    endBucket.push(segment);
+    adjacency.set(endKey, endBucket);
+  });
+
+  return adjacency;
+}
+
+function rebuildContoursFromSegments(segments: LineSegment[]) {
+  const remaining = new Set(segments);
+  const adjacency = buildAdjacency(segments);
+  const contours: DxfExportContour[] = [];
+
+  while (remaining.size) {
+    const seed = remaining.values().next().value as LineSegment;
+    remaining.delete(seed);
+    const chain: GeometryPoint[] = [seed.start, seed.end];
+    let extended = true;
+
+    while (extended) {
+      extended = false;
+
+      const head = chain[0];
+      const tail = chain[chain.length - 1];
+      const headCandidates = adjacency.get(pointKey(head)) ?? [];
+      const tailCandidates = adjacency.get(pointKey(tail)) ?? [];
+
+      for (const candidate of tailCandidates) {
+        if (!remaining.has(candidate)) {
+          continue;
+        }
+
+        const nextPoint =
+          pointKey(candidate.start) === pointKey(tail) ? candidate.end : candidate.start;
+        chain.push(nextPoint);
+        remaining.delete(candidate);
+        extended = true;
+        break;
+      }
+
+      if (extended) {
+        continue;
+      }
+
+      for (const candidate of headCandidates) {
+        if (!remaining.has(candidate)) {
+          continue;
+        }
+
+        const nextPoint =
+          pointKey(candidate.start) === pointKey(head) ? candidate.end : candidate.start;
+        chain.unshift(nextPoint);
+        remaining.delete(candidate);
+        extended = true;
+        break;
+      }
+    }
+
+    const closed = chain.length > 2 && pointKey(chain[0]) === pointKey(chain[chain.length - 1]);
+    const normalizedPoints = removeCollinearPoints(
+      closed ? dedupeClosingPoint(chain) : chain,
+      0.001,
+      closed
+    );
+    contours.push({
+      points: normalizedPoints,
+      closed
+    });
   }
 
-  const transformed = new DOMPoint(point.x, point.y).matrixTransform(matrix);
+  return contours;
+}
+
+export function mergeCommonLineContours(contours: DxfExportContour[]) {
+  const counts = new Map<string, number>();
+  const segments = contoursToSegments(contours);
+
+  segments.forEach((segment) => {
+    const key = segmentKey(segment.start, segment.end);
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  });
+
+  const filtered = segments.filter((segment) => (counts.get(segmentKey(segment.start, segment.end)) ?? 0) === 1);
+  if (!filtered.length) {
+    return contours;
+  }
+
+  return rebuildContoursFromSegments(filtered);
+}
+
+function contourBounds(contour: DxfExportContour) {
   return {
-    x: transformed.x,
-    y: transformed.y
+    minX: Math.min(...contour.points.map((point) => point.x)),
+    minY: Math.min(...contour.points.map((point) => point.y)),
+    maxX: Math.max(...contour.points.map((point) => point.x)),
+    maxY: Math.max(...contour.points.map((point) => point.y))
   };
 }
 
-function dedupeClosingPoint(points: GeometryPoint[]) {
-  if (points.length < 2) {
-    return points;
+function contourArea(points: GeometryPoint[]) {
+  let area = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    area += current.x * next.y - next.x * current.y;
   }
-
-  const first = points[0];
-  const last = points[points.length - 1];
-  if (Math.abs(first.x - last.x) < 0.001 && Math.abs(first.y - last.y) < 0.001) {
-    return points.slice(0, -1);
-  }
-
-  return points;
+  return Math.abs(area / 2);
 }
 
-function isClosedSvgShape(element: SVGElement) {
-  const tag = element.tagName.toLowerCase();
-  if (["rect", "circle", "ellipse", "polygon"].includes(tag)) {
+function contourLength(points: GeometryPoint[]) {
+  let length = 0;
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const start = points[index];
+    const end = points[index + 1];
+    length += Math.hypot(end.x - start.x, end.y - start.y);
+  }
+  return length;
+}
+
+function reversePoints<T>(points: T[]) {
+  return points.slice().reverse();
+}
+
+function pointsNearEqual(left: GeometryPoint[], right: GeometryPoint[], tolerance = 0.12) {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  return left.every((point, index) => {
+    const candidate = right[index];
+    return Math.abs(point.x - candidate.x) <= tolerance && Math.abs(point.y - candidate.y) <= tolerance;
+  });
+}
+
+function isDegenerateExportContour(contour: DxfExportContour) {
+  if (contour.points.length < (contour.closed ? 3 : 2)) {
     return true;
   }
 
-  if (tag === "path") {
-    return /z/i.test(element.getAttribute("d") ?? "");
+  const bounds = contourBounds(contour);
+  if (
+    Math.abs(bounds.maxX - bounds.minX) < EXPORT_POINT_TOLERANCE &&
+    Math.abs(bounds.maxY - bounds.minY) < EXPORT_POINT_TOLERANCE
+  ) {
+    return true;
   }
 
-  return false;
+  if (contour.closed) {
+    return contourArea(contour.points) < 0.05;
+  }
+
+  return contourLength(contour.points) < 0.25;
 }
 
-function sampleRenderedSvgElement(element: SVGElement) {
-  const geometryElement = element as SVGGeometryElement;
-  if (typeof geometryElement.getTotalLength !== "function") {
-    return null;
-  }
+function dedupeExportContours(contours: DxfExportContour[]) {
+  const deduped: DxfExportContour[] = [];
 
-  const totalLength = geometryElement.getTotalLength();
-  const closed = isClosedSvgShape(element);
-  const tag = element.tagName.toLowerCase();
-  const segments =
-    tag === "line"
-      ? 1
-      : Math.max(24, Math.min(720, Math.ceil(totalLength / 2.5)));
-  const matrix = (element as SVGGraphicsElement).getCTM();
-  const points: GeometryPoint[] = [];
+  contours.forEach((contour) => {
+    if (isDegenerateExportContour(contour)) {
+      return;
+    }
 
-  for (let index = 0; index <= segments; index += 1) {
-    const sample = geometryElement.getPointAtLength((totalLength * index) / segments);
-    points.push(transformSvgPoint(matrix, { x: sample.x, y: sample.y }));
-  }
+    const exists = deduped.some((candidate) => {
+      if (candidate.closed !== contour.closed) {
+        return false;
+      }
 
-  const normalized = closed ? dedupeClosingPoint(points) : points;
-  if (normalized.length < 2) {
-    return null;
-  }
+      return (
+        pointsNearEqual(candidate.points, contour.points) ||
+        pointsNearEqual(candidate.points, reversePoints(contour.points))
+      );
+    });
 
-  return {
-    points: normalized,
-    closed
-  };
+    if (!exists) {
+      deduped.push(contour);
+    }
+  });
+
+  return deduped;
 }
 
 async function loadJsPdf() {
@@ -200,86 +370,6 @@ async function loadJsPdf() {
   }
 
   return jsPdfModulePromise;
-}
-
-function samplePathPoints(pathData: string, offsetX = 0, offsetY = 0) {
-  const probe = createProbeSvg();
-  const path = document.createElementNS(SVG_NS, "path");
-  path.setAttribute("d", pathData);
-  path.setAttribute("transform", `translate(${-offsetX} ${-offsetY})`);
-  probe.appendChild(path);
-
-  const length = path.getTotalLength();
-  const segments = Math.max(48, Math.min(960, Math.ceil(length / 2.5)));
-  const points: GeometryPoint[] = [];
-
-  for (let index = 0; index <= segments; index += 1) {
-    const point = path.getPointAtLength((length * index) / segments);
-    points.push({ x: point.x, y: point.y });
-  }
-
-  probe.remove();
-  return points;
-}
-
-function sampleArcPoints(entity: Extract<GeometryEntity, { kind: "arc" }>, segments = 72) {
-  const sweep = normalizeArcSweep(entity.startAngle, entity.endAngle);
-  const points: GeometryPoint[] = [];
-
-  for (let index = 0; index <= segments; index += 1) {
-    const angle = entity.startAngle + sweep * (index / segments);
-    points.push({
-      x: entity.cx + entity.r * Math.cos(angle),
-      y: entity.cy - entity.r * Math.sin(angle)
-    });
-  }
-
-  return points;
-}
-
-function sampleEllipseArcPoints(entity: Extract<GeometryEntity, { kind: "ellipseArc" }>, segments = 96) {
-  let sweep = entity.endAngle - entity.startAngle;
-  while (sweep <= 0) {
-    sweep += Math.PI * 2;
-  }
-
-  const points: GeometryPoint[] = [];
-  const cos = Math.cos(entity.rotation);
-  const sin = Math.sin(entity.rotation);
-  for (let index = 0; index <= segments; index += 1) {
-    const angle = entity.startAngle + sweep * (index / segments);
-    const localX = entity.rx * Math.cos(angle);
-    const localY = entity.ry * Math.sin(angle);
-    points.push({
-      x: entity.cx + localX * cos - localY * sin,
-      y: entity.cy + localX * sin + localY * cos
-    });
-  }
-  return points;
-}
-
-function sampleEllipsePoints(cx: number, cy: number, rx: number, ry: number, rotation = 0, segments = 96) {
-  const points: GeometryPoint[] = [];
-  const cos = Math.cos(rotation);
-  const sin = Math.sin(rotation);
-  for (let index = 0; index <= segments; index += 1) {
-    const angle = (Math.PI * 2 * index) / segments;
-    const localX = rx * Math.cos(angle);
-    const localY = ry * Math.sin(angle);
-    points.push({
-      x: cx + localX * cos - localY * sin,
-      y: cy + localX * sin + localY * cos
-    });
-  }
-  return points;
-}
-
-function normalizeArcSweep(startAngle: number, endAngle: number) {
-  let sweep = endAngle - startAngle;
-  while (sweep <= 0) {
-    sweep += Math.PI * 2;
-  }
-  return sweep;
 }
 
 function normalizeDegrees(angle: number) {
@@ -305,47 +395,124 @@ function normalizeEllipseParams(startParam: number, endParam: number) {
 }
 
 function parseSimpleSvgPath(pathData: string, offsetX: number, offsetY: number): SimplePathSegment[] | null {
-  const tokens = pathData.match(/[MLAZ]|-?\d*\.?\d+(?:e[-+]?\d+)?/gi);
+  const tokens = pathData.match(/[MLHVCSQTAZmlhvcsqtaz]|-?\d*\.?\d+(?:e[-+]?\d+)?/gi);
   if (!tokens?.length) {
     return null;
   }
 
   const segments: SimplePathSegment[] = [];
   let index = 0;
+  let currentX = 0;
+  let currentY = 0;
+  let subpathStartX = 0;
+  let subpathStartY = 0;
+  let previousCommand: SimplePathCommand | null = null;
+  let previousQuadraticControl: GeometryPoint | null = null;
+  let previousCubicControl2: GeometryPoint | null = null;
+  let activeCommand: string | null = null;
+
+  const isPathCommand = (token: string | undefined) => token != null && /^[MLHVCSQTAZmlhvcsqtaz]$/.test(token);
+
+  const readPoint = (relative: boolean) => {
+    const x = Number(tokens[index]);
+    const y = Number(tokens[index + 1]);
+    index += 2;
+    if (!Number.isFinite(x) || !Number.isFinite(y)) {
+      return null;
+    }
+
+    const point = {
+      x: (relative ? currentX + x : x) - offsetX,
+      y: (relative ? currentY + y : y) - offsetY
+    };
+    currentX = relative ? currentX + x : x;
+    currentY = relative ? currentY + y : y;
+    return point;
+  };
 
   while (index < tokens.length) {
-    const command = tokens[index];
-    index += 1;
+    const token = tokens[index];
+    if (isPathCommand(token)) {
+      activeCommand = token;
+      index += 1;
+    } else if (!activeCommand) {
+      return null;
+    }
 
-    if (command === "M") {
-      const x = Number(tokens[index]);
-      const y = Number(tokens[index + 1]);
-      index += 2;
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    const command: string | null = activeCommand;
+    if (!command) {
+      return null;
+    }
+
+    if (command === "M" || command === "m") {
+      const relative: boolean = command === "m";
+      const point = readPoint(relative);
+      if (!point) {
         return null;
       }
+      subpathStartX = currentX;
+      subpathStartY = currentY;
       segments.push({
         kind: "move",
-        point: { x: x - offsetX, y: y - offsetY }
+        point
       });
+      previousCommand = "move";
+      previousQuadraticControl = null;
+      previousCubicControl2 = null;
+      activeCommand = relative ? "l" : "L";
       continue;
     }
 
-    if (command === "L") {
-      const x = Number(tokens[index]);
-      const y = Number(tokens[index + 1]);
-      index += 2;
-      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+    if (command === "L" || command === "l") {
+      const point = readPoint(command === "l");
+      if (!point) {
         return null;
       }
       segments.push({
         kind: "line",
-        point: { x: x - offsetX, y: y - offsetY }
+        point
       });
+      previousCommand = "line";
+      previousQuadraticControl = null;
+      previousCubicControl2 = null;
       continue;
     }
 
-    if (command === "A") {
+    if (command === "H" || command === "h") {
+      const x = Number(tokens[index]);
+      index += 1;
+      if (!Number.isFinite(x)) {
+        return null;
+      }
+      currentX = command === "h" ? currentX + x : x;
+      segments.push({
+        kind: "line",
+        point: { x: currentX - offsetX, y: currentY - offsetY }
+      });
+      previousCommand = "line";
+      previousQuadraticControl = null;
+      previousCubicControl2 = null;
+      continue;
+    }
+
+    if (command === "V" || command === "v") {
+      const y = Number(tokens[index]);
+      index += 1;
+      if (!Number.isFinite(y)) {
+        return null;
+      }
+      currentY = command === "v" ? currentY + y : y;
+      segments.push({
+        kind: "line",
+        point: { x: currentX - offsetX, y: currentY - offsetY }
+      });
+      previousCommand = "line";
+      previousQuadraticControl = null;
+      previousCubicControl2 = null;
+      continue;
+    }
+
+    if (command === "A" || command === "a") {
       const rx = Number(tokens[index]);
       const ry = Number(tokens[index + 1]);
       const rotation = Number(tokens[index + 2]);
@@ -357,6 +524,8 @@ function parseSimpleSvgPath(pathData: string, offsetX: number, offsetY: number):
       if (![rx, ry, rotation, largeArc, sweep, x, y].every(Number.isFinite)) {
         return null;
       }
+      currentX = command === "a" ? currentX + x : x;
+      currentY = command === "a" ? currentY + y : y;
       segments.push({
         kind: "arc",
         rx,
@@ -364,13 +533,147 @@ function parseSimpleSvgPath(pathData: string, offsetX: number, offsetY: number):
         rotation,
         largeArc: Boolean(largeArc),
         sweep: Boolean(sweep),
-        point: { x: x - offsetX, y: y - offsetY }
+        point: { x: currentX - offsetX, y: currentY - offsetY }
       });
+      previousCommand = "arc";
+      previousQuadraticControl = null;
+      previousCubicControl2 = null;
+      continue;
+    }
+
+    if (command === "Q" || command === "q") {
+      const cx = Number(tokens[index]);
+      const cy = Number(tokens[index + 1]);
+      const x = Number(tokens[index + 2]);
+      const y = Number(tokens[index + 3]);
+      index += 4;
+      if (![cx, cy, x, y].every(Number.isFinite)) {
+        return null;
+      }
+      const control = {
+        x: (command === "q" ? currentX + cx : cx) - offsetX,
+        y: (command === "q" ? currentY + cy : cy) - offsetY
+      };
+      currentX = command === "q" ? currentX + x : x;
+      currentY = command === "q" ? currentY + y : y;
+      segments.push({
+        kind: "quadratic",
+        control,
+        point: { x: currentX - offsetX, y: currentY - offsetY }
+      });
+      previousCommand = "quadratic";
+      previousQuadraticControl = control;
+      previousCubicControl2 = null;
+      continue;
+    }
+
+    if (command === "T" || command === "t") {
+      const x = Number(tokens[index]);
+      const y = Number(tokens[index + 1]);
+      index += 2;
+      if (![x, y].every(Number.isFinite)) {
+        return null;
+      }
+
+      const startPoint = { x: currentX - offsetX, y: currentY - offsetY };
+      const control: GeometryPoint =
+        previousCommand === "quadratic" && previousQuadraticControl
+          ? {
+              x: startPoint.x * 2 - previousQuadraticControl.x,
+              y: startPoint.y * 2 - previousQuadraticControl.y
+            }
+          : startPoint;
+
+      currentX = command === "t" ? currentX + x : x;
+      currentY = command === "t" ? currentY + y : y;
+      segments.push({
+        kind: "quadratic",
+        control,
+        point: { x: currentX - offsetX, y: currentY - offsetY }
+      });
+      previousCommand = "quadratic";
+      previousQuadraticControl = control;
+      previousCubicControl2 = null;
+      continue;
+    }
+
+    if (command === "C" || command === "c") {
+      const c1x = Number(tokens[index]);
+      const c1y = Number(tokens[index + 1]);
+      const c2x = Number(tokens[index + 2]);
+      const c2y = Number(tokens[index + 3]);
+      const x = Number(tokens[index + 4]);
+      const y = Number(tokens[index + 5]);
+      index += 6;
+      if (![c1x, c1y, c2x, c2y, x, y].every(Number.isFinite)) {
+        return null;
+      }
+      const control1 = {
+        x: (command === "c" ? currentX + c1x : c1x) - offsetX,
+        y: (command === "c" ? currentY + c1y : c1y) - offsetY
+      };
+      const control2 = {
+        x: (command === "c" ? currentX + c2x : c2x) - offsetX,
+        y: (command === "c" ? currentY + c2y : c2y) - offsetY
+      };
+      currentX = command === "c" ? currentX + x : x;
+      currentY = command === "c" ? currentY + y : y;
+      segments.push({
+        kind: "cubic",
+        control1,
+        control2,
+        point: { x: currentX - offsetX, y: currentY - offsetY }
+      });
+      previousCommand = "cubic";
+      previousQuadraticControl = null;
+      previousCubicControl2 = control2;
+      continue;
+    }
+
+    if (command === "S" || command === "s") {
+      const c2x = Number(tokens[index]);
+      const c2y = Number(tokens[index + 1]);
+      const x = Number(tokens[index + 2]);
+      const y = Number(tokens[index + 3]);
+      index += 4;
+      if (![c2x, c2y, x, y].every(Number.isFinite)) {
+        return null;
+      }
+
+      const startPoint = { x: currentX - offsetX, y: currentY - offsetY };
+      const control1: GeometryPoint =
+        previousCommand === "cubic" && previousCubicControl2
+          ? {
+              x: startPoint.x * 2 - previousCubicControl2.x,
+              y: startPoint.y * 2 - previousCubicControl2.y
+            }
+          : startPoint;
+      const control2: GeometryPoint = {
+        x: (command === "s" ? currentX + c2x : c2x) - offsetX,
+        y: (command === "s" ? currentY + c2y : c2y) - offsetY
+      };
+      currentX = command === "s" ? currentX + x : x;
+      currentY = command === "s" ? currentY + y : y;
+      segments.push({
+        kind: "cubic",
+        control1,
+        control2,
+        point: { x: currentX - offsetX, y: currentY - offsetY }
+      });
+      previousCommand = "cubic";
+      previousQuadraticControl = null;
+      previousCubicControl2 = control2;
       continue;
     }
 
     if (command === "Z" || command === "z") {
+      currentX = subpathStartX;
+      currentY = subpathStartY;
       segments.push({ kind: "close" });
+      previousCommand = "close";
+      previousQuadraticControl = null;
+      previousCubicControl2 = null;
+      activeCommand = null;
       continue;
     }
 
@@ -378,6 +681,51 @@ function parseSimpleSvgPath(pathData: string, offsetX: number, offsetY: number):
   }
 
   return segments;
+}
+
+function sampleQuadraticBezierPoints(
+  start: GeometryPoint,
+  control: GeometryPoint,
+  end: GeometryPoint,
+  segments = 24
+) {
+  const points: GeometryPoint[] = [];
+  for (let index = 1; index <= segments; index += 1) {
+    const t = index / segments;
+    const mt = 1 - t;
+    points.push({
+      x: mt * mt * start.x + 2 * mt * t * control.x + t * t * end.x,
+      y: mt * mt * start.y + 2 * mt * t * control.y + t * t * end.y
+    });
+  }
+  return points;
+}
+
+function sampleCubicBezierPoints(
+  start: GeometryPoint,
+  control1: GeometryPoint,
+  control2: GeometryPoint,
+  end: GeometryPoint,
+  segments = 32
+) {
+  const points: GeometryPoint[] = [];
+  for (let index = 1; index <= segments; index += 1) {
+    const t = index / segments;
+    const mt = 1 - t;
+    points.push({
+      x:
+        mt * mt * mt * start.x +
+        3 * mt * mt * t * control1.x +
+        3 * mt * t * t * control2.x +
+        t * t * t * end.x,
+      y:
+        mt * mt * mt * start.y +
+        3 * mt * mt * t * control1.y +
+        3 * mt * t * t * control2.y +
+        t * t * t * end.y
+    });
+  }
+  return points;
 }
 
 function vectorAngle(ux: number, uy: number, vx: number, vy: number) {
@@ -493,48 +841,19 @@ function getRenderableEntityPoints(piece: PieceItem, entity: GeometryEntity, mat
     case "arc":
       return transformPolylinePoints(sampleArcPoints(entity, 72), matrix);
     case "path":
-      return transformPolylinePoints(samplePathPoints(entity.d, offsetX, offsetY), matrix);
+      return transformPolylinePoints(
+        samplePathPoints(entity.d, {
+          offsetX,
+          offsetY,
+          closed: entity.closed,
+          minSegments: 48,
+          maxSegments: 960,
+          segmentLength: 2.5
+        }),
+        matrix
+      );
     default:
       return [];
-  }
-}
-
-function entityToSvg(entity: GeometryEntity, offsetX: number, offsetY: number) {
-  switch (entity.kind) {
-    case "polyline":
-      return `<${entity.closed ? "polygon" : "polyline"} fill="none" stroke="#111" stroke-width="1" points="${entity.points
-        .map((point) => `${point.x + offsetX},${point.y + offsetY}`)
-        .join(" ")}" />`;
-    case "circle":
-      return `<circle cx="${entity.cx + offsetX}" cy="${entity.cy + offsetY}" r="${entity.r}" fill="none" stroke="#111" stroke-width="1" />`;
-    case "ellipse":
-      return `<ellipse cx="${entity.cx + offsetX}" cy="${entity.cy + offsetY}" rx="${entity.rx}" ry="${entity.ry}" fill="none" stroke="#111" stroke-width="1" ${Math.abs(entity.rotation) > 0.000001 ? `transform="rotate(${(entity.rotation * 180) / Math.PI} ${entity.cx + offsetX} ${entity.cy + offsetY})"` : ""} />`;
-    case "ellipseArc": {
-      const points = sampleEllipseArcPoints(entity, 96);
-      const start = points[0];
-      const end = points[points.length - 1];
-      if (!start || !end) {
-        return "";
-      }
-      let sweep = entity.endAngle - entity.startAngle;
-      while (sweep <= 0) {
-        sweep += Math.PI * 2;
-      }
-      return `<path d="M ${start.x + offsetX} ${start.y + offsetY} A ${entity.rx} ${entity.ry} ${(entity.rotation * 180) / Math.PI} ${sweep > Math.PI ? 1 : 0} 1 ${end.x + offsetX} ${end.y + offsetY}" fill="none" stroke="#111" stroke-width="1" />`;
-    }
-    case "arc": {
-      const x1 = entity.cx + entity.r * Math.cos(entity.startAngle) + offsetX;
-      const y1 = entity.cy - entity.r * Math.sin(entity.startAngle) + offsetY;
-      const x2 = entity.cx + entity.r * Math.cos(entity.endAngle) + offsetX;
-      const y2 = entity.cy - entity.r * Math.sin(entity.endAngle) + offsetY;
-      const sweep = normalizeArcSweep(entity.startAngle, entity.endAngle);
-      const largeArc = sweep > Math.PI ? 1 : 0;
-      return `<path d="M ${x1} ${y1} A ${entity.r} ${entity.r} 0 ${largeArc} 0 ${x2} ${y2}" fill="none" stroke="#111" stroke-width="1" />`;
-    }
-    case "path":
-      return `<path d="${entity.d}" fill="none" stroke="#111" stroke-width="1" transform="translate(${-offsetX} ${-offsetY})" />`;
-    default:
-      return "";
   }
 }
 
@@ -555,27 +874,55 @@ function isClosedEntity(entity: GeometryEntity) {
   return entity.kind !== "arc" && entity.kind !== "ellipseArc";
 }
 
+function buildFallbackContoursForEntity(piece: PieceItem, entity: GeometryEntity, matrix: Matrix) {
+  const points = getRenderableEntityPoints(piece, entity, matrix);
+  if (points.length < 2) {
+    return [] as DxfExportContour[];
+  }
+
+  return [
+    {
+      points,
+      closed: isClosedEntity(entity)
+    }
+  ];
+}
+
+function buildPlacementContours(
+  piece: PieceItem,
+  material: MaterialConfig,
+  placement: NestingResult["placements"][number]
+) {
+  const contours = buildPlacedEntities(piece, material, placement).flatMap(({ entity, matrix }) =>
+    buildFallbackContoursForEntity(piece, entity, matrix)
+  );
+
+  return contours
+    .map((contour) => ({
+      closed: contour.closed,
+      points: contour.closed
+        ? dedupeClosingPoint(removeCollinearPoints(contour.points, 0.001, true))
+        : removeCollinearPoints(contour.points, 0.001, false)
+    }))
+    .filter((contour) => contour.points.length >= (contour.closed ? 3 : 2));
+}
+
+function contourToSvgMarkup(contour: DxfExportContour) {
+  const points = contour.points
+    .filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y))
+    .map((point) => `${point.x},${point.y}`)
+    .join(" ");
+
+  if (!points) {
+    return "";
+  }
+
+  return `<${contour.closed ? "polygon" : "polyline"} fill="none" stroke="#111" stroke-width="1" points="${points}" />`;
+}
+
 export function buildResultSvg(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
   const { sceneWidth, sceneHeight } = getSceneMetrics(material, result);
-
-  const markup = result.placements
-    .map((placement) => {
-      const piece = findPiece(pieces, placement.pieceId);
-      if (!piece) {
-        return "";
-      }
-
-      const offsetX = getSheetOffset(material, placement.sheetIndex) + placement.x;
-      const offsetY = placement.y;
-      const normalizedMarkup = normalizeSvgMarkup(piece.geometry.svgMarkup, piece.geometry.sourceBounds);
-
-      return `
-        <g transform="translate(${offsetX} ${offsetY}) rotate(${placement.rotation})">
-          ${normalizedMarkup}
-        </g>
-      `;
-    })
-    .join("");
+  const markup = buildDxfExportContours(pieces, material, result).map(contourToSvgMarkup).join("");
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${sceneWidth} ${sceneHeight}">
     ${markup}
@@ -588,47 +935,17 @@ export function downloadSvg(pieces: PieceItem[], material: MaterialConfig, resul
 
 function buildDxfExportContours(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
   const contours: DxfExportContour[] = [];
-  const probe = createProbeSvg();
 
-  result.placements.forEach((placement, placementIndex) => {
+  result.placements.forEach((placement) => {
     const piece = findPiece(pieces, placement.pieceId);
     if (!piece) {
       return;
     }
 
-    const group = document.createElementNS(SVG_NS, "g");
-    group.setAttribute(
-      "transform",
-      `translate(${getSheetOffset(material, placement.sheetIndex) + placement.x} ${placement.y}) rotate(${placement.rotation})`
-    );
-    group.setAttribute("data-piece", `${placement.pieceId}-${placementIndex}`);
-    group.innerHTML = normalizeSvgMarkup(piece.geometry.svgMarkup, piece.geometry.sourceBounds);
-    probe.appendChild(group);
-
-    group.querySelectorAll("path,rect,circle,ellipse,polygon,polyline,line").forEach((element) => {
-      const contour = sampleRenderedSvgElement(element as SVGElement);
-      if (!contour) {
-        return;
-      }
-
-      const points = contour.points.filter(
-        (point) => Number.isFinite(point.x) && Number.isFinite(point.y)
-      );
-      if (points.length < 2) {
-        return;
-      }
-
-      contours.push({
-        points,
-        closed: contour.closed
-      });
-    });
-
-    group.remove();
+    contours.push(...buildPlacementContours(piece, material, placement));
   });
 
-  probe.remove();
-  return contours;
+  return dedupeExportContours(mergeCommonLineContours(contours));
 }
 
 async function downloadDxfFromApi(pieces: PieceItem[], material: MaterialConfig, result: NestingResult) {
@@ -914,6 +1231,27 @@ function buildPathDxfEntities(
       return;
     }
 
+    if (segment.kind === "quadratic") {
+      const sampled = sampleQuadraticBezierPoints(currentPoint, segment.control, segment.point).map((point) =>
+        applyMatrix(matrix, point)
+      );
+      polylinePoints.push(...sampled);
+      currentPoint = segment.point;
+      return;
+    }
+
+    if (segment.kind === "cubic") {
+      const sampled = sampleCubicBezierPoints(
+        currentPoint,
+        segment.control1,
+        segment.control2,
+        segment.point
+      ).map((point) => applyMatrix(matrix, point));
+      polylinePoints.push(...sampled);
+      currentPoint = segment.point;
+      return;
+    }
+
     if (segment.kind === "close") {
       if (subpathStart) {
         polylinePoints.push(applyMatrix(matrix, subpathStart));
@@ -1075,6 +1413,8 @@ export function buildResultDxf(pieces: PieceItem[], material: MaterialConfig, re
       return;
     }
 
+    const fallbackContours: DxfExportContour[] = [];
+
     buildPlacedEntities(piece, material, placement).forEach(({ entity, matrix }) => {
       if (entity.kind === "circle") {
         const center = applyMatrix(matrix, { x: entity.cx, y: entity.cy });
@@ -1091,6 +1431,9 @@ export function buildResultDxf(pieces: PieceItem[], material: MaterialConfig, re
           );
           return;
         }
+
+        fallbackContours.push(...buildFallbackContoursForEntity(piece, entity, matrix));
+        return;
       }
 
       if (entity.kind === "arc") {
@@ -1113,6 +1456,9 @@ export function buildResultDxf(pieces: PieceItem[], material: MaterialConfig, re
           );
           return;
         }
+
+        fallbackContours.push(...buildFallbackContoursForEntity(piece, entity, matrix));
+        return;
       }
 
       if (entity.kind === "ellipse") {
@@ -1174,14 +1520,7 @@ export function buildResultDxf(pieces: PieceItem[], material: MaterialConfig, re
       }
 
       if (entity.kind === "polyline") {
-        entities.push(
-          buildPolylineEntity(
-            transformPolylinePoints(entity.points, matrix),
-            entity.closed,
-            sceneHeight,
-            nextDxfHandle(handleState)
-          )
-        );
+        fallbackContours.push(...buildFallbackContoursForEntity(piece, entity, matrix));
         return;
       }
 
@@ -1191,16 +1530,14 @@ export function buildResultDxf(pieces: PieceItem[], material: MaterialConfig, re
           entities.push(...pathEntities);
           return;
         }
-      }
 
-      entities.push(
-        buildPolylineEntity(
-          getRenderableEntityPoints(piece, entity, matrix),
-          isClosedEntity(entity),
-          sceneHeight,
-          nextDxfHandle(handleState)
-        )
-      );
+        fallbackContours.push(...buildFallbackContoursForEntity(piece, entity, matrix));
+        return;
+      }
+    });
+
+    mergeCommonLineContours(fallbackContours).forEach((contour) => {
+      entities.push(buildPolylineEntity(contour.points, contour.closed, sceneHeight, nextDxfHandle(handleState)));
     });
   });
 
