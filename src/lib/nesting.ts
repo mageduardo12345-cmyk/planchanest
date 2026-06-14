@@ -531,6 +531,11 @@ interface BranchEvaluation {
   placeableCount: number;
 }
 
+interface AttemptRuntimeHooks {
+  deadline?: number;
+  onProgress?: (pieceIndex: number, totalPieces: number) => void;
+}
+
 interface CandidateCoordinates {
   x: number[];
   y: number[];
@@ -2693,10 +2698,11 @@ function isBetterResult(candidate: NestingResult, best: NestingResult | null) {
   return candidateScore.placements > bestScore.placements;
 }
 
-function runSingleAttempt(
+async function runSingleAttempt(
   expanded: PreparedPiece[],
   material: { width: number; height: number; sheetCount: number },
-  config: NestingConfig
+  config: NestingConfig,
+  hooks?: AttemptRuntimeHooks
 ) {
   const searchCache: PlacementSearchCache = {
     candidateCoordinates: new Map(),
@@ -2710,8 +2716,22 @@ function runSingleAttempt(
   const unplaced: string[] = [];
   const optionLimit = qualityPlacementOptionLimit(config);
   const lookaheadDepth = qualityLookaheadDepth(config);
+  let lastYieldAt = performance.now();
 
   for (let index = 0; index < expanded.length; index += 1) {
+    if (hooks?.deadline && performance.now() >= hooks.deadline) {
+      for (let remainingIndex = index; remainingIndex < expanded.length; remainingIndex += 1) {
+        unplaced.push(expanded[remainingIndex].pieceId);
+      }
+      break;
+    }
+
+    hooks?.onProgress?.(index, expanded.length);
+    if (performance.now() - lastYieldAt > 18) {
+      await wait(0);
+      lastYieldAt = performance.now();
+    }
+
     const prepared = expanded[index];
     const remainingPrepared = lookaheadDepth > 0 ? expanded.slice(index + 1, index + 1 + lookaheadDepth) : [];
     let bestOption: BranchEvaluation | null = null;
@@ -2730,6 +2750,11 @@ function runSingleAttempt(
       );
       if (!bestOption || compareBranchEvaluation(evaluated, bestOption) < 0) {
         bestOption = evaluated;
+      }
+
+      if (performance.now() - lastYieldAt > 18) {
+        await wait(0);
+        lastYieldAt = performance.now();
       }
     }
 
@@ -2839,9 +2864,27 @@ async function computeNesting(
       }
       const attemptResult = cachedResult
         ? cloneNestingResult(cachedResult)
-        : (() => {
+        : await (async () => {
+            onProgress?.(
+              `Evaluando acomodo, generacion ${generationIndex + 1}, intento ${attemptIndex + 1}.`,
+              progressValue()
+            );
+            lastHeartbeatAt = performance.now();
+            await wait(0);
             const attemptPieces = buildAttemptPiecesFromGene(materialAwareExpanded, gene);
-            const freshResult = runSingleAttempt(attemptPieces, material, config);
+            const freshResult = await runSingleAttempt(attemptPieces, material, config, {
+              deadline,
+              onProgress: (pieceIndex, totalPieces) => {
+                const pieceNumber = Math.min(pieceIndex + 1, totalPieces);
+                const pieceProgress = totalPieces > 0 ? pieceNumber / totalPieces : 0;
+                const value = Math.min(progressValue() + pieceProgress * 0.06, 0.98);
+                const now = performance.now();
+                if (now - lastHeartbeatAt > 120) {
+                  onProgress?.(`Acomodando pieza ${pieceNumber} de ${totalPieces}.`, value);
+                  lastHeartbeatAt = now;
+                }
+              }
+            });
             geneResultCache.set(signature, cloneNestingResult(freshResult));
             return freshResult;
           })();
@@ -2900,7 +2943,7 @@ async function computeNesting(
     generationIndex += 1;
   } while (performance.now() < deadline && attemptIndex < 240);
 
-  const finalResult = bestResult ?? runSingleAttempt(materialAwareExpanded, material, config);
+  const finalResult = bestResult ?? (await runSingleAttempt(materialAwareExpanded, material, config));
   finalResult.elapsedMs = performance.now() - startedAt;
   onProgress?.("Resultado listo.", 1);
   return finalResult;
